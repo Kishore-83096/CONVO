@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -8,7 +9,45 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def configure_environment() -> str:
+def command_line_environment() -> str | None:
+    parser = argparse.ArgumentParser(
+        description="Run the Parrot Identity service.",
+    )
+    parser.add_argument(
+        "--env",
+        choices=("local", "production"),
+        help="Load settings from .env.local or .env.production.",
+    )
+    arguments, _ = parser.parse_known_args()
+    return arguments.env
+
+
+def load_environment_file(environment: str) -> str:
+    environment_file = BASE_DIR / f".env.{environment}"
+
+    if not environment_file.is_file():
+        raise RuntimeError(
+            f"Environment file not found: {environment_file.name}"
+        )
+
+    load_dotenv(environment_file, override=True)
+
+    loaded_environment = os.getenv("APP_ENV", "").strip().lower()
+
+    if loaded_environment != environment:
+        raise RuntimeError(
+            f"{environment_file.name} must contain "
+            f"APP_ENV={environment}"
+        )
+
+    print(f"Loaded {environment_file.name}")
+    return loaded_environment
+
+
+def configure_environment(selected_environment: str | None = None) -> str:
+    if selected_environment:
+        return load_environment_file(selected_environment)
+
     environment = os.getenv("APP_ENV", "").strip().lower()
 
     # Actual production deployment:
@@ -29,26 +68,12 @@ def configure_environment() -> str:
             "Select environment [local/production]: "
         ).strip().lower()
 
-        if selection == "local":
-            load_dotenv(BASE_DIR / ".env.local", override=False)
-
-        elif selection == "production":
-            # Only for testing production settings locally.
-            load_dotenv(BASE_DIR / ".env.production", override=False)
-
-        else:
+        if selection not in {"local", "production"}:
             raise RuntimeError(
                 "Enter either 'local' or 'production'."
             )
 
-        loaded_environment = os.getenv("APP_ENV", "").strip().lower()
-
-        if loaded_environment != selection:
-            raise RuntimeError(
-                f"The selected file must contain APP_ENV={selection}"
-            )
-
-        return loaded_environment
+        return load_environment_file(selection)
 
     # A deployed process cannot answer input().
     raise RuntimeError(
@@ -57,7 +82,7 @@ def configure_environment() -> str:
     )
 
 
-current_environment = configure_environment()
+current_environment = configure_environment(command_line_environment())
 
 
 # Import only after the environment is configured.
