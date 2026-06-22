@@ -12,6 +12,7 @@ All commands use Windows PowerShell.
 | Local container | parrot-identity-local |
 | Production container | parrot-identity-production |
 | Service URL | http://127.0.0.1:5000 |
+| Base URL behavior | `/` redirects to `/api/v1/health/all` in local and production |
 | Important | Local and production cannot both use host port 5000 |
 | Secrets | Never commit .env.local or .env.production |
 | Production | Replace every #<...> placeholder before running |
@@ -145,6 +146,7 @@ HEALTH CHECKS
 | MySQL | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/database |
 | Cloudinary | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/cloudinary |
 | Everything | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/all |
+| Base URL (redirects to everything) | Invoke-RestMethod http://127.0.0.1:5000 |
 | Docker local health | docker inspect --format='{{json .State.Health}}' parrot-identity-local |
 | Docker production health | docker inspect --format='{{json .State.Health}}' parrot-identity-production |
 

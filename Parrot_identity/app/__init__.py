@@ -1,7 +1,7 @@
 from urllib.parse import unquote, urlparse
 
 import cloudinary
-from flask import Flask
+from flask import Flask, redirect, url_for
 
 from app.config import Config
 from app.extensions import (
@@ -27,6 +27,7 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     initialize_extensions(app)
     configure_cloudinary(app)
     register_blueprints(app)
+    register_root_route(app)
     import_models()
     register_error_handlers(app)
 
@@ -103,6 +104,12 @@ def register_blueprints(app: Flask) -> None:
     #     contacts_blueprint,
     #     url_prefix="/api/v1/contacts",
     # )
+
+
+def register_root_route(app: Flask) -> None:
+    @app.get("/")
+    def root_health():
+        return redirect(url_for("health.complete_health"))
 
 
 def import_models() -> None:
