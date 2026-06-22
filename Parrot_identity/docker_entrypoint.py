@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 
 from sqlalchemy.engine import make_url
@@ -27,11 +28,29 @@ def configure_database_host() -> None:
     ).render_as_string(hide_password=False)
 
 
+def run_database_migrations() -> None:
+    print("Applying database migrations...", flush=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "flask",
+            "--app",
+            "parrot_identity:app",
+            "db",
+            "upgrade",
+        ],
+        check=True,
+    )
+    print("Database migrations are up to date.", flush=True)
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         raise RuntimeError("No container command was provided.")
 
     configure_database_host()
+    run_database_migrations()
     os.execvp(sys.argv[1], sys.argv[1:])
 
 

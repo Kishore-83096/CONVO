@@ -35,7 +35,7 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(
-        minutes=int(os.getenv("JWT_ACCESS_TOKEN_MINUTES", "15"))
+        hours=int(os.getenv("JWT_ACCESS_TOKEN_HOURS", "24"))
     )
 
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(

@@ -12,11 +12,15 @@ from app.extensions import (
     migrate,
 )
 from app.health import health_blueprint
+from app.shared.error_handlers import register_error_handlers
 
 
-def create_app() -> Flask:
+def create_app(config_overrides: dict | None = None) -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
+
+    if config_overrides:
+        app.config.update(config_overrides)
 
     validate_configuration(app)
 
@@ -24,6 +28,7 @@ def create_app() -> Flask:
     configure_cloudinary(app)
     register_blueprints(app)
     import_models()
+    register_error_handlers(app)
 
     return app
 
@@ -74,18 +79,21 @@ def configure_cloudinary(app: Flask) -> None:
 
 
 def register_blueprints(app: Flask) -> None:
+    from app.auth import auth_blueprint, configure_jwt
+
+    configure_jwt()
+
     app.register_blueprint(
         health_blueprint,
         url_prefix="/api/v1/health",
     )
 
+    app.register_blueprint(
+        auth_blueprint,
+        url_prefix="/api/v1/auth",
+    )
+
     # Register these after their blueprints are created:
-    #
-    # app.register_blueprint(
-    #     auth_blueprint,
-    #     url_prefix="/api/v1/auth",
-    # )
-    #
     # app.register_blueprint(
     #     profiles_blueprint,
     #     url_prefix="/api/v1/profiles",

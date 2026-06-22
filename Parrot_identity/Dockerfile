@@ -16,6 +16,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements-docker.txt
 
 COPY --chown=parrot:parrot app ./app
+COPY --chown=parrot:parrot migrations ./migrations
 COPY --chown=parrot:parrot parrot_identity.py docker_entrypoint.py ./
 
 USER parrot

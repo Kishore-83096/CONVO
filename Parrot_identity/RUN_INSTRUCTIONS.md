@@ -25,9 +25,26 @@ NORMAL PYTHON RUN
 | Open project | cd D:\VENV\PARROT-V2\Parrot_identity | Run first |
 | Activate virtual environment | .\venv\Scripts\Activate.ps1 | Windows PowerShell |
 | Install dependencies | python -m pip install -r requirements.txt | Run initially or after dependency changes |
+| Apply database migrations | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db upgrade | Run before the first local start and after model changes |
 | Run local | python parrot_identity.py --env local | Loads .env.local |
 | Run production settings locally | python parrot_identity.py --env production | Loads .env.production |
 | Stop Python server | Ctrl+C | Use in the running terminal |
+
+
+FLASK-ALEMBIC DATABASE MIGRATIONS
+---------------------------------
+
+The `migrations` directory is already initialized. Do not run `flask db init`
+again. Run these commands from `D:\VENV\PARROT-V2\Parrot_identity` after
+activating the virtual environment.
+
+| Action | Exact PowerShell command | When to use it |
+|---|---|---|
+| Show current database revision | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db current | Check which migration is applied |
+| Show migration history | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db history | Inspect available revisions |
+| Generate an Alembic migration | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db migrate -m "describe the schema change" | Run after changing SQLAlchemy models, then review the generated file |
+| Apply all pending migrations | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db upgrade | Run before starting the local service |
+| Roll back one migration | $env:APP_ENV="local"; python -m flask --app parrot_identity:app db downgrade -1 | Use only after reviewing the downgrade operation and data impact |
 
 
 DOCKER SETUP AND IMAGE
@@ -61,6 +78,10 @@ LOCAL CONTAINER
 
 PRODUCTION CONTAINER
 --------------------
+
+Every production container start or restart runs `flask db upgrade` in
+`docker_entrypoint.py` before Gunicorn starts. If migration fails, the entrypoint
+exits and the application server does not start against an outdated schema.
 
 | Action | Exact PowerShell command | Notes |
 |---|---|---|
@@ -100,6 +121,19 @@ REBUILD AFTER CODE OR DEPENDENCY CHANGES
 | Production | 1 | docker rm -f parrot-identity-production |
 | Production | 2 | docker build -t parrot-identity:latest . |
 | Production | 3 | docker run -d --name parrot-identity-production --restart unless-stopped -p 5000:5000 --env-file .env.production -e APP_ENV=production parrot-identity:latest |
+
+
+AUTHENTICATION API
+------------------
+
+All request bodies use JSON. Login sessions expire after 24 hours and can be
+ended early with logout.
+
+| Action | Method and path | Required JSON fields |
+|---|---|---|
+| Register | POST /api/v1/auth/register | full_name, username, password, confirm_password |
+| Login | POST /api/v1/auth/login | method (username, email, or contact_number), identifier, password |
+| Logout | POST /api/v1/auth/logout | Authorization: Bearer &lt;access_token&gt; header |
 
 
 HEALTH CHECKS
