@@ -81,6 +81,8 @@ def configure_cloudinary(app: Flask) -> None:
 
 def register_blueprints(app: Flask) -> None:
     from app.auth import auth_blueprint, configure_jwt
+    from app.contacts import contacts_blueprint
+    from app.profiles import profiles_blueprint
 
     configure_jwt()
 
@@ -94,16 +96,15 @@ def register_blueprints(app: Flask) -> None:
         url_prefix="/api/v1/auth",
     )
 
-    # Register these after their blueprints are created:
-    # app.register_blueprint(
-    #     profiles_blueprint,
-    #     url_prefix="/api/v1/profiles",
-    # )
-    #
-    # app.register_blueprint(
-    #     contacts_blueprint,
-    #     url_prefix="/api/v1/contacts",
-    # )
+    app.register_blueprint(
+        profiles_blueprint,
+        url_prefix="/api/v1/profiles",
+    )
+
+    app.register_blueprint(
+        contacts_blueprint,
+        url_prefix="/api/v1/contacts",
+    )
 
 
 def register_root_route(app: Flask) -> None:

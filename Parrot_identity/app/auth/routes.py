@@ -1,11 +1,18 @@
 from flask import Blueprint, request
-from flask_jwt_extended import get_jwt, jwt_required
+from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 
-from app.auth.schemas import LoginSchema, RegisterSchema
+from app.auth.schemas import (
+    DeleteAccountSchema,
+    LoginSchema,
+    RegisterSchema,
+    ResetPasswordSchema,
+)
 from app.auth.services import (
+    delete_user_account,
     login_user,
     logout_session,
     register_user,
+    reset_user_password,
     user_details,
 )
 from app.extensions import limiter
@@ -16,6 +23,8 @@ from app.shared.responses import api_response
 auth_blueprint = Blueprint("auth", __name__)
 register_schema = RegisterSchema()
 login_schema = LoginSchema()
+reset_password_schema = ResetPasswordSchema()
+delete_account_schema = DeleteAccountSchema()
 
 
 def json_request_body() -> dict:
@@ -56,6 +65,34 @@ def login():
             "expires_at": expires_at.isoformat(),
             "user": user_details(user),
         },
+        status_code=200,
+    )
+
+
+@auth_blueprint.post("/reset-password")
+@limiter.limit("5 per minute")
+@jwt_required()
+def reset_password():
+    payload = reset_password_schema.load(json_request_body())
+    reset_user_password(int(get_jwt_identity()), payload)
+
+    return api_response(
+        success=True,
+        message="Password has been changed successfully. Log in again.",
+        status_code=200,
+    )
+
+
+@auth_blueprint.delete("/delete-account")
+@limiter.limit("3 per minute")
+@jwt_required()
+def delete_account():
+    payload = delete_account_schema.load(json_request_body())
+    delete_user_account(int(get_jwt_identity()), payload)
+
+    return api_response(
+        success=True,
+        message="Account and all associated data deleted permanently.",
         status_code=200,
     )
 

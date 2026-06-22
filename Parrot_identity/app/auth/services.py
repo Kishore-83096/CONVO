@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.auth.models import AuthSession, User
 from app.extensions import db
+from app.profiles.models import ProfilePicture
+from app.profiles.services import destroy_cloudinary_asset
 from app.shared.exceptions import ApiError
 
 
@@ -174,6 +176,76 @@ def login_user(payload: dict) -> tuple[User, str, datetime]:
     db.session.commit()
 
     return user, access_token, expires_at
+
+
+def get_active_user_for_update(user_id: int) -> User | None:
+    statement = (
+        select(User)
+        .where(User.id == user_id, User.is_active.is_(True))
+        .with_for_update()
+    )
+    return db.session.scalar(statement)
+
+
+def account_credentials_match(user: User | None, payload: dict) -> bool:
+    if user is None:
+        return False
+
+    try:
+        contact_number = normalize_login_identifier(
+            "contact_number",
+            payload["contact_number"],
+        )
+    except ApiError:
+        contact_number = None
+
+    return (
+        payload["username"] == user.username
+        and payload["email"] == user.email
+        and contact_number == user.contact_number
+        and user.check_password(payload["current_password"])
+    )
+
+
+def reset_user_password(user_id: int, payload: dict) -> None:
+    user = get_active_user_for_update(user_id)
+    credentials_match = account_credentials_match(user, payload)
+    passwords_match = (
+        payload["new_password"] == payload["confirm_new_password"]
+    )
+
+    if not credentials_match or not passwords_match:
+        raise ApiError(
+            "Password could not be changed because the provided data "
+            "is invalid.",
+            status_code=400,
+        )
+
+    user.set_password(payload["new_password"])
+    db.session.execute(
+        delete(AuthSession).where(AuthSession.user_id == user.id)
+    )
+    db.session.commit()
+
+
+def delete_user_account(user_id: int, payload: dict) -> None:
+    user = get_active_user_for_update(user_id)
+
+    if not account_credentials_match(user, payload):
+        raise ApiError(
+            "Account could not be deleted because the provided data "
+            "is invalid.",
+            status_code=400,
+        )
+
+    picture = db.session.scalar(
+        select(ProfilePicture).where(ProfilePicture.user_id == user.id)
+    )
+    if picture is not None:
+        destroy_cloudinary_asset(picture.public_id)
+
+    db.session.delete(user)
+    db.session.commit()
 
 
 def logout_session(jti: str) -> None:

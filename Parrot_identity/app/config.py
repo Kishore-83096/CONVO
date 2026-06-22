@@ -71,7 +71,13 @@ class Config:
     CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
     CLOUDINARY_FOLDER = os.getenv(
         "CLOUDINARY_FOLDER",
-        "parrot/local/profiles",
+        "parrotv2/local/profiles",
+    )
+    PROFILE_IMAGE_MAX_BYTES = int(
+        os.getenv("PROFILE_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))
+    )
+    MAX_CONTENT_LENGTH = int(
+        os.getenv("MAX_REQUEST_BYTES", str(6 * 1024 * 1024))
     )
 
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

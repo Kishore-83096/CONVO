@@ -102,3 +102,57 @@ class LoginSchema(Schema):
                 normalized["method"].strip().lower()
             )
         return normalized
+
+
+class AccountCredentialsSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    username = fields.String(
+        required=True,
+        validate=validate.Length(min=1, max=30),
+    )
+    email = fields.Email(required=True)
+    contact_number = fields.Raw(required=True)
+    current_password = fields.String(
+        required=True,
+        load_only=True,
+        validate=validate.Length(min=1, max=128),
+    )
+
+    @pre_load
+    def normalize_identifiers(self, data, **kwargs):
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        if isinstance(normalized.get("username"), str):
+            normalized["username"] = (
+                normalized["username"]
+                .strip()
+                .lower()
+                .removeprefix("@")
+            )
+
+        if isinstance(normalized.get("email"), str):
+            normalized["email"] = normalized["email"].strip().lower()
+
+        return normalized
+
+
+class ResetPasswordSchema(AccountCredentialsSchema):
+    new_password = fields.String(
+        required=True,
+        load_only=True,
+        validate=validate.Length(min=8, max=128),
+    )
+    confirm_new_password = fields.String(
+        required=True,
+        load_only=True,
+        validate=validate.Length(max=128),
+    )
+
+
+class DeleteAccountSchema(AccountCredentialsSchema):
+    pass

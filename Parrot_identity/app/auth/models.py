@@ -58,6 +58,41 @@ class User(db.Model):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    profile_basic = db.relationship(
+        "ProfileBasic",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    profile_address = db.relationship(
+        "ProfileAddress",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    profile_picture = db.relationship(
+        "ProfilePicture",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    profile_events = db.relationship(
+        "ProfileEvent",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    contacts = db.relationship(
+        "Contact",
+        foreign_keys="Contact.owner_id",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
+    contact_entries = db.relationship(
+        "Contact",
+        foreign_keys="Contact.contact_user_id",
+        back_populates="contact_user",
+        cascade="all, delete-orphan",
+    )
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
