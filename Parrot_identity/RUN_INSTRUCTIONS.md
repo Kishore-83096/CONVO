@@ -17,6 +17,9 @@ All commands use Windows PowerShell.
 | Secrets | Never commit .env.local or .env.production |
 | Production | Replace every #<...> placeholder before running |
 
+API endpoints and Postman examples are documented separately in
+[`API_DOCUMENTATION.md`](API_DOCUMENTATION.md).
+
 
 NORMAL PYTHON RUN
 -----------------
@@ -122,85 +125,6 @@ REBUILD AFTER CODE OR DEPENDENCY CHANGES
 | Production | 1 | docker rm -f parrot-identity-production |
 | Production | 2 | docker build -t parrot-identity:latest . |
 | Production | 3 | docker run -d --name parrot-identity-production --restart unless-stopped -p 5000:5000 --env-file .env.production -e APP_ENV=production parrot-identity:latest |
-
-
-AUTHENTICATION API
-------------------
-
-All request bodies use JSON. Login sessions expire after 24 hours. Logout ends
-all active sessions belonging to the authenticated user.
-
-| Action | Method and path | Required JSON fields |
-|---|---|---|
-| Register | POST /api/v1/auth/register | full_name, username, password, confirm_password |
-| Login | POST /api/v1/auth/login | method (username, email, or contact_number), identifier, password |
-| Reset password | POST /api/v1/auth/reset-password | Authorization header; username, email, contact_number, current_password, new_password, confirm_new_password |
-| Delete account | DELETE /api/v1/auth/delete-account | Authorization header; username, email, contact_number, current_password |
-| Logout | POST /api/v1/auth/logout | Authorization: Bearer &lt;access_token&gt; header |
-
-
-PROFILE API
------------
-
-Every profile request requires `Authorization: Bearer <access_token>`. The
-authenticated user's `full_name`, `username`, `email`, and `contact_number` are
-read-only and are returned by the aggregate profile endpoint.
-
-| Resource | Method and path | Input |
-|---|---|---|
-| Complete profile | GET /api/v1/profiles/me | None |
-| Basic data | GET, POST, PATCH, PUT, DELETE /api/v1/profiles/me/basic | JSON: bio, date_of_birth, gender, occupation, website |
-| Address | GET, POST, PATCH, PUT, DELETE /api/v1/profiles/me/address | JSON: address_line_1, address_line_2, city, state, postal_code, country |
-| Events collection | GET, POST /api/v1/profiles/me/events | JSON: event_name, event_date, description, recurring; maximum 5 events |
-| Individual event | GET, PATCH, PUT, DELETE /api/v1/profiles/me/events/&lt;event_id&gt; | Event fields for update |
-| Profile picture | GET, POST, PATCH, PUT, DELETE /api/v1/profiles/me/picture | POST/PATCH/PUT use multipart form-data with an `image` file |
-
-Profile pictures accept JPEG and PNG files up to 5 MB. Picture creation,
-replacement, and deletion call Cloudinary directly. The Cloudinary public ID is
-`<CLOUDINARY_FOLDER>/<username>`, producing filenames such as `username.png` or
-`username.jpg`. It remains stable during replacement so the old asset is
-overwritten and invalidated. The database stores only the Cloudinary public ID,
-format, version, and image metadata. API responses generate the delivery URL at
-request time, so the frontend still receives a directly loadable image URL. The
-upload explicitly sends `CLOUDINARY_FOLDER` as Cloudinary's `asset_folder`, so
-Dynamic Folders accounts place the asset in the requested Media Library folder.
-
-
-CONTACTS API
-------------
-
-Every contacts request requires `Authorization: Bearer <access_token>`.
-Contacts can contain only other active Parrot users and are private to the user
-who saved them.
-
-| Action | Method and path | Input |
-|---|---|---|
-| Search by contact number | POST /api/v1/contacts/search | JSON: contact_number |
-| Add contact | POST /api/v1/contacts | JSON: contact_number, saved_name |
-| List contacts | GET /api/v1/contacts | None |
-| Contact details | GET /api/v1/contacts/&lt;contact_id&gt; | None |
-| Rename contact | PATCH /api/v1/contacts/&lt;contact_id&gt; | JSON: saved_name |
-| Delete contact | DELETE /api/v1/contacts/&lt;contact_id&gt; | None |
-
-Search results contain only the user's full name, username, and profile
-picture. Contact-list entries contain the contact ID, saved name, and profile
-picture. The ID is used for detail, rename, and delete requests. Contact details
-also contain the contact number, username, and full name. Only `saved_name` can
-be changed.
-
-
-HEALTH CHECKS
--------------
-
-| Check | Exact PowerShell command |
-|---|---|
-| Service | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health |
-| MySQL | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/database |
-| Cloudinary | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/cloudinary |
-| Everything | Invoke-RestMethod http://127.0.0.1:5000/api/v1/health/all |
-| Base URL (redirects to everything) | Invoke-RestMethod http://127.0.0.1:5000 |
-| Docker local health | docker inspect --format='{{json .State.Health}}' parrot-identity-local |
-| Docker production health | docker inspect --format='{{json .State.Health}}' parrot-identity-production |
 
 
 GENERAL DOCKER STATUS
