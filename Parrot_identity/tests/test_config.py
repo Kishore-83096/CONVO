@@ -17,6 +17,10 @@ from docker_entrypoint import configure_database_host
             "postgresql+psycopg",
         ),
         (
+            "postgresql+psycopg2://user:pass@host/database",
+            "postgresql+psycopg",
+        ),
+        (
             '  "postgresql://user:pass@host/database"  ',
             "postgresql+psycopg",
         ),

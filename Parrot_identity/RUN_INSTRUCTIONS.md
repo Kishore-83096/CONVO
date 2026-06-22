@@ -176,6 +176,7 @@ COMMON ERRORS
 | Production keeps restarting | docker logs --tail 50 parrot-identity-production | Correct .env.production, then recreate it |
 | Local keeps restarting | docker logs --tail 50 parrot-identity-local | Correct .env.local, then recreate it |
 | Render reports `Could not parse SQLAlchemy URL` | In Render Environment, set `DATABASE_URL` to the raw `postgresql://...` URL | Do not include `DATABASE_URL=`, shell commands, or placeholder text |
+| Render reports `No module named psycopg2` | Rebuild and deploy the current image, and use `postgresql://...` or `postgresql+psycopg://...` for `DATABASE_URL` | The project uses Psycopg 3 and normalizes legacy Psycopg 2 URLs automatically |
 
 
 CLEANUP
