@@ -3,18 +3,30 @@ import subprocess
 import sys
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+from app.config import normalize_database_url
 
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def configure_database_host() -> None:
-    database_url = os.getenv("DATABASE_URL")
+    database_url = normalize_database_url(os.getenv("DATABASE_URL"))
 
     if not database_url:
         return
 
-    parsed_url = make_url(database_url)
+    os.environ["DATABASE_URL"] = database_url
+
+    try:
+        parsed_url = make_url(database_url)
+    except ArgumentError as error:
+        raise RuntimeError(
+            "DATABASE_URL is invalid. In Render, set DATABASE_URL to "
+            "the database URL only (for example, postgresql://...), "
+            "without a DATABASE_URL= prefix."
+        ) from error
 
     if parsed_url.host not in LOCAL_DATABASE_HOSTS:
         return

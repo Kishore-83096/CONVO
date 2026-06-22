@@ -175,6 +175,7 @@ COMMON ERRORS
 | Port 5000 already allocated | docker ps --format "table {{.Names}}\t{{.Ports}}" | Stop the container currently using port 5000 |
 | Production keeps restarting | docker logs --tail 50 parrot-identity-production | Correct .env.production, then recreate it |
 | Local keeps restarting | docker logs --tail 50 parrot-identity-local | Correct .env.local, then recreate it |
+| Render reports `Could not parse SQLAlchemy URL` | In Render Environment, set `DATABASE_URL` to the raw `postgresql://...` URL | Do not include `DATABASE_URL=`, shell commands, or placeholder text |
 
 
 CLEANUP

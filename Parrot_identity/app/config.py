@@ -6,6 +6,15 @@ def normalize_database_url(database_url: str | None) -> str | None:
     if not database_url:
         return database_url
 
+    database_url = database_url.strip()
+
+    if (
+        len(database_url) >= 2
+        and database_url[0] == database_url[-1]
+        and database_url[0] in {'"', "'"}
+    ):
+        database_url = database_url[1:-1].strip()
+
     if database_url.startswith("postgres://"):
         return database_url.replace(
             "postgres://",
