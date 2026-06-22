@@ -249,14 +249,16 @@ def delete_user_account(user_id: int, payload: dict) -> None:
 
 
 def logout_session(jti: str) -> None:
-    statement = select(AuthSession).where(AuthSession.jti == jti)
-    session = db.session.scalar(statement)
+    statement = select(AuthSession.user_id).where(AuthSession.jti == jti)
+    user_id = db.session.scalar(statement)
 
-    if session is None:
+    if user_id is None:
         raise ApiError(
             "Session is no longer active.",
             status_code=401,
         )
 
-    db.session.delete(session)
+    db.session.execute(
+        delete(AuthSession).where(AuthSession.user_id == user_id)
+    )
     db.session.commit()

@@ -127,8 +127,8 @@ REBUILD AFTER CODE OR DEPENDENCY CHANGES
 AUTHENTICATION API
 ------------------
 
-All request bodies use JSON. Login sessions expire after 24 hours and can be
-ended early with logout.
+All request bodies use JSON. Login sessions expire after 24 hours. Logout ends
+all active sessions belonging to the authenticated user.
 
 | Action | Method and path | Required JSON fields |
 |---|---|---|

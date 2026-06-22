@@ -109,29 +109,43 @@ def test_login_returns_one_message_for_wrong_identifier_or_password(client):
     )
 
 
-def test_logout_deletes_session_and_revokes_token(client):
+def test_logout_deletes_all_user_sessions_and_revokes_every_token(client):
     register_user(client)
-    login = client.post(
-        "/api/v1/auth/login",
-        json={
-            "method": "username",
-            "identifier": "ada_lovelace",
-            "password": REGISTER_PAYLOAD["password"],
-        },
-    )
-    token = login.get_json()["data"]["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    login_payload = {
+        "method": "username",
+        "identifier": "ada_lovelace",
+        "password": REGISTER_PAYLOAD["password"],
+    }
+    first_login = client.post("/api/v1/auth/login", json=login_payload)
+    second_login = client.post("/api/v1/auth/login", json=login_payload)
+    first_headers = {
+        "Authorization": (
+            f"Bearer {first_login.get_json()['data']['access_token']}"
+        )
+    }
+    second_headers = {
+        "Authorization": (
+            f"Bearer {second_login.get_json()['data']['access_token']}"
+        )
+    }
+    assert len(db.session.scalars(db.select(AuthSession)).all()) == 2
 
-    logout = client.post("/api/v1/auth/logout", headers=headers)
-    repeated_logout = client.post(
+    logout = client.post("/api/v1/auth/logout", headers=first_headers)
+    first_repeated_logout = client.post(
         "/api/v1/auth/logout",
-        headers=headers,
+        headers=first_headers,
+    )
+    second_session_logout = client.post(
+        "/api/v1/auth/logout",
+        headers=second_headers,
     )
 
     assert logout.status_code == 200
     assert logout.get_json()["message"] == "User logged out."
-    assert repeated_logout.status_code == 401
-    assert repeated_logout.get_json()["message"] == (
+    assert db.session.scalar(db.select(AuthSession)) is None
+    assert first_repeated_logout.status_code == 401
+    assert second_session_logout.status_code == 401
+    assert second_session_logout.get_json()["message"] == (
         "Session is no longer active."
     )
 
