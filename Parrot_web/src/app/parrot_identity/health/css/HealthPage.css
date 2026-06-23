@@ -202,10 +202,29 @@
   line-height: 1.5;
 }
 
-.component-status > span:last-child {
+.component-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.component-meta code {
+  width: 100%;
+  color: var(--foreground);
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.component-meta span {
   color: var(--muted-foreground);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
+}
+
+.component-meta span + span::before {
+  margin-right: 8px;
+  content: "·";
 }
 
 .component-dot {

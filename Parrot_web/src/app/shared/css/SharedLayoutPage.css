@@ -1,0 +1,219 @@
+.shared-layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 19rem minmax(0, 1fr);
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.shared-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.shared-sidebar-header {
+  min-height: 4rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1rem;
+}
+
+.shared-layout-brand {
+  display: inline-flex;
+  gap: 0.625rem;
+  align-items: center;
+  font-weight: 650;
+}
+
+.shared-layout-brand img {
+  width: auto;
+  height: 2rem;
+}
+
+.shared-sidebar-toggle {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  gap: 4px;
+  place-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.shared-sidebar-toggle:hover {
+  background: var(--muted);
+}
+
+.shared-sidebar-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.shared-sidebar-toggle span {
+  width: 1rem;
+  height: 1.5px;
+  display: block;
+  background: currentColor;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.shared-sidebar-toggle[aria-expanded="true"] span:first-child {
+  transform: translateY(5.5px) rotate(45deg);
+}
+
+.shared-sidebar-toggle[aria-expanded="true"] span:nth-child(2) {
+  opacity: 0;
+}
+
+.shared-sidebar-toggle[aria-expanded="true"] span:last-child {
+  transform: translateY(-5.5px) rotate(-45deg);
+}
+
+.shared-sidebar-body {
+  height: calc(100vh - 4rem);
+  overflow-y: auto;
+  padding: 1.25rem 1rem;
+}
+
+.shared-sidebar-tabs p,
+.shared-account > p {
+  margin-bottom: 0.75rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shared-sidebar-tabs {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.shared-sidebar-tabs button {
+  width: 100%;
+  display: block;
+  padding: 0.625rem 0.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shared-sidebar-tabs button:hover {
+  background: color-mix(in oklch, var(--muted) 60%, transparent);
+}
+
+.shared-sidebar-tabs button[aria-selected="true"] {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.shared-sidebar-tabs button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.shared-sidebar-panel {
+  padding-top: 1.25rem;
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.shared-identity-summary > p {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shared-identity-summary h2 {
+  margin-top: 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.shared-identity-summary span {
+  display: block;
+  margin-top: 0.625rem;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.shared-account h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.shared-account dl {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.shared-account dt {
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.shared-account dd {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.shared-account-error {
+  margin-top: 1rem;
+  color: var(--destructive);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.shared-account-logout {
+  width: 100%;
+  margin-top: 1.5rem;
+}
+
+.shared-layout-content {
+  width: min(72rem, 100%);
+  padding: 2.5rem 1.25rem;
+  margin: 0 auto;
+}
+
+@media (max-width: 720px) {
+  .shared-layout {
+    display: block;
+  }
+
+  .shared-sidebar {
+    position: static;
+    height: auto;
+    min-height: auto;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .shared-sidebar-body {
+    height: auto;
+    max-height: 70vh;
+  }
+}

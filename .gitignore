@@ -34,6 +34,7 @@ dmypy.json
 .pyre/
 .ruff_cache/
 .pytest_cache/
+**/pytest-cache-files-*/
 .hypothesis/
 .tox/
 .nox/
@@ -126,6 +127,8 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # Local tooling and task caches
+.agents/
+.codex/
 .eslintcache
 .stylelintcache
 .sass-cache/

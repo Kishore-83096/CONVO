@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ApiClientError, apiRequest } from "@/api/client"
-import heroImg from "@/assets/hero.png"
+import parrotIcon from "@/assets/icons/ParrotIcon_3D_effect.svg"
 import { env } from "@/config/env"
 
-import "./HealthApp.css"
+import "../css/HealthPage.css"
 
 interface ComponentHealth {
   component: string
   status: "up" | "down"
   message: string
   latency_ms: number
+  details?: {
+    database_engine?: string
+  }
 }
 
 interface CompleteHealth {
@@ -24,11 +27,26 @@ type RequestStatus = "loading" | "connected" | "error"
 
 const componentLabels: Record<string, string> = {
   service: "Identity service",
-  database: "PostgreSQL",
   cloudinary: "Cloudinary",
 }
 
-function HealthApp() {
+function getComponentLabel(component: string, environment: string) {
+  if (component === "database") {
+    return environment === "production"
+      ? "Production database"
+      : "Development database"
+  }
+
+  return componentLabels[component] ?? component
+}
+
+function formatDatabaseEngine(engine: string) {
+  return engine === "postgresql"
+    ? "PostgreSQL"
+    : engine.charAt(0).toUpperCase() + engine.slice(1)
+}
+
+function HealthPage() {
   const initialCheckStarted = useRef(false)
   const [requestStatus, setRequestStatus] = useState<RequestStatus>("loading")
   const [health, setHealth] = useState<CompleteHealth | null>(null)
@@ -76,7 +94,7 @@ function HealthApp() {
     <main className="app-shell">
       <section className="status-page" aria-labelledby="page-title">
         <div className="brand-mark" aria-hidden="true">
-          <img src={heroImg} alt="" />
+          <img src={parrotIcon} alt="" />
         </div>
 
         <div className="intro">
@@ -145,12 +163,28 @@ function HealthApp() {
                       aria-hidden="true"
                     />
                     <h3>
-                      {componentLabels[component.component] ??
-                        component.component}
+                      {getComponentLabel(
+                        component.component,
+                        health.environment,
+                      )}
                     </h3>
                   </div>
                   <p>{component.message}</p>
-                  <span>{component.latency_ms.toFixed(2)} ms</span>
+                  <div className="component-meta">
+                    {component.component === "service" && (
+                      <code title={env.identityApiBaseUrl}>
+                        {env.identityApiBaseUrl}
+                      </code>
+                    )}
+                    {component.details?.database_engine && (
+                      <span>
+                        {formatDatabaseEngine(
+                          component.details.database_engine,
+                        )}
+                      </span>
+                    )}
+                    <span>{component.latency_ms.toFixed(2)} ms</span>
+                  </div>
                 </article>
               ))}
             </div>
@@ -177,4 +211,4 @@ function HealthApp() {
   )
 }
 
-export default HealthApp
+export default HealthPage
