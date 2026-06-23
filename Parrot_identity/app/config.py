@@ -39,6 +39,19 @@ def normalize_database_url(database_url: str | None) -> str | None:
     return database_url
 
 
+def parse_comma_separated_values(
+    value: str | None,
+) -> list[str]:
+    if not value:
+        return []
+
+    return [
+        item.strip().rstrip("/")
+        for item in value.split(",")
+        if item.strip()
+    ]
+
+
 class Config:
     APP_ENV = os.getenv("APP_ENV", "local")
 
@@ -58,9 +71,11 @@ class Config:
         days=int(os.getenv("JWT_REFRESH_TOKEN_DAYS", "30"))
     )
 
-    FRONTEND_ORIGIN = os.getenv(
-        "FRONTEND_ORIGIN",
-        "http://localhost:5173",
+    FRONTEND_ORIGINS = parse_comma_separated_values(
+        os.getenv(
+            "FRONTEND_ORIGIN",
+            "http://localhost:5173",
+        )
     )
 
     RATELIMIT_STORAGE_URI = os.getenv(
@@ -73,11 +88,19 @@ class Config:
         "CLOUDINARY_FOLDER",
         "parrotv2/local/profiles",
     )
+
     PROFILE_IMAGE_MAX_BYTES = int(
-        os.getenv("PROFILE_IMAGE_MAX_BYTES", str(5 * 1024 * 1024))
+        os.getenv(
+            "PROFILE_IMAGE_MAX_BYTES",
+            str(5 * 1024 * 1024),
+        )
     )
+
     MAX_CONTENT_LENGTH = int(
-        os.getenv("MAX_REQUEST_BYTES", str(6 * 1024 * 1024))
+        os.getenv(
+            "MAX_REQUEST_BYTES",
+            str(6 * 1024 * 1024),
+        )
     )
 
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
