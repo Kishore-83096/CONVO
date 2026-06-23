@@ -12,13 +12,21 @@ from app.extensions import (
     migrate,
 )
 from app.health import health_blueprint
-from app.shared.error_handlers import register_error_handlers
+from app.shared.error_handlers import (
+    register_error_handlers,
+)
 
 
-def create_app(config_overrides: dict | None = None) -> Flask:
+def create_app(
+    config_overrides: dict | None = None,
+) -> Flask:
     app = Flask(__name__)
+
+    # Load the main application configuration.
     app.config.from_object(Config)
 
+    # Allow tests or other environments to override
+    # individual configuration values.
     if config_overrides:
         app.config.update(config_overrides)
 
@@ -34,7 +42,9 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     return app
 
 
-def initialize_extensions(app: Flask) -> None:
+def initialize_extensions(
+    app: Flask,
+) -> None:
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
@@ -43,17 +53,42 @@ def initialize_extensions(app: Flask) -> None:
     cors.init_app(
         app,
         resources={
-            r"/api/*": {
-                "origins": [
-                    app.config["FRONTEND_ORIGIN"]
+            r"/api/.*": {
+                # FRONTEND_ORIGINS is already a list.
+                # Do not wrap it inside another list.
+                "origins": app.config[
+                    "FRONTEND_ORIGINS"
+                ],
+                "methods": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                    "OPTIONS",
+                ],
+                "allow_headers": [
+                    "Content-Type",
+                    "Authorization",
                 ],
             }
         },
     )
 
+    # Safe temporary startup log for checking CORS.
+    # This does not print any secrets.
+    app.logger.info(
+        "Allowed CORS origins: %s",
+        app.config["FRONTEND_ORIGINS"],
+    )
 
-def configure_cloudinary(app: Flask) -> None:
-    cloudinary_url = app.config.get("CLOUDINARY_URL")
+
+def configure_cloudinary(
+    app: Flask,
+) -> None:
+    cloudinary_url = app.config.get(
+        "CLOUDINARY_URL"
+    )
 
     if not cloudinary_url:
         return
@@ -68,19 +103,29 @@ def configure_cloudinary(app: Flask) -> None:
     ):
         raise RuntimeError(
             "CLOUDINARY_URL must use the format "
-            "cloudinary://API_KEY:API_SECRET@CLOUD_NAME"
+            "cloudinary://"
+            "API_KEY:API_SECRET@CLOUD_NAME"
         )
 
     cloudinary.config(
         cloud_name=parsed_url.hostname,
-        api_key=unquote(parsed_url.username),
-        api_secret=unquote(parsed_url.password),
+        api_key=unquote(
+            parsed_url.username
+        ),
+        api_secret=unquote(
+            parsed_url.password
+        ),
         secure=True,
     )
 
 
-def register_blueprints(app: Flask) -> None:
-    from app.auth import auth_blueprint, configure_jwt
+def register_blueprints(
+    app: Flask,
+) -> None:
+    from app.auth import (
+        auth_blueprint,
+        configure_jwt,
+    )
     from app.contacts import contacts_blueprint
     from app.profiles import profiles_blueprint
 
@@ -107,25 +152,36 @@ def register_blueprints(app: Flask) -> None:
     )
 
 
-def register_root_route(app: Flask) -> None:
+def register_root_route(
+    app: Flask,
+) -> None:
     @app.get("/")
     def root_health():
-        return redirect(url_for("health.complete_health"))
+        return redirect(
+            url_for("health.complete_health")
+        )
 
 
 def import_models() -> None:
-    # These imports allow Flask-Migrate to discover models.
+    """
+    Import models so Flask-Migrate/Alembic can
+    discover their metadata.
+    """
     from app.auth import models as auth_models  # noqa: F401
     from app.contacts import models as contact_models  # noqa: F401
     from app.profiles import models as profile_models  # noqa: F401
 
 
-def validate_configuration(app: Flask) -> None:
+def validate_configuration(
+    app: Flask,
+) -> None:
     required_settings = {
         "DATABASE_URL": app.config.get(
             "SQLALCHEMY_DATABASE_URI"
         ),
-        "SECRET_KEY": app.config.get("SECRET_KEY"),
+        "SECRET_KEY": app.config.get(
+            "SECRET_KEY"
+        ),
         "JWT_SECRET_KEY": app.config.get(
             "JWT_SECRET_KEY"
         ),
@@ -141,4 +197,14 @@ def validate_configuration(app: Flask) -> None:
         raise RuntimeError(
             "Missing required environment variables: "
             + ", ".join(missing_settings)
+        )
+
+    frontend_origins = app.config.get(
+        "FRONTEND_ORIGINS"
+    )
+
+    if not frontend_origins:
+        raise RuntimeError(
+            "FRONTEND_ORIGINS must contain at "
+            "least one allowed frontend origin."
         )

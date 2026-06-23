@@ -2,12 +2,19 @@ import os
 from datetime import timedelta
 
 
-def normalize_database_url(database_url: str | None) -> str | None:
+def normalize_database_url(
+    database_url: str | None,
+) -> str | None:
+    """
+    Normalize PostgreSQL database URLs for SQLAlchemy
+    using the psycopg version 3 driver.
+    """
     if not database_url:
         return database_url
 
     database_url = database_url.strip()
 
+    # Remove matching surrounding quotes if present.
     if (
         len(database_url) >= 2
         and database_url[0] == database_url[-1]
@@ -29,7 +36,9 @@ def normalize_database_url(database_url: str | None) -> str | None:
             1,
         )
 
-    if database_url.startswith("postgresql+psycopg2://"):
+    if database_url.startswith(
+        "postgresql+psycopg2://"
+    ):
         return database_url.replace(
             "postgresql+psycopg2://",
             "postgresql+psycopg://",
@@ -42,6 +51,19 @@ def normalize_database_url(database_url: str | None) -> str | None:
 def parse_comma_separated_values(
     value: str | None,
 ) -> list[str]:
+    """
+    Convert a comma-separated environment variable into
+    a clean Python list.
+
+    Example:
+        http://localhost:5173,https://example.com
+
+    Becomes:
+        [
+            "http://localhost:5173",
+            "https://example.com",
+        ]
+    """
     if not value:
         return []
 
@@ -53,28 +75,49 @@ def parse_comma_separated_values(
 
 
 class Config:
-    APP_ENV = os.getenv("APP_ENV", "local")
+    APP_ENV = os.getenv(
+        "APP_ENV",
+        "local",
+    )
 
     SECRET_KEY = os.getenv("SECRET_KEY")
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-
-    SQLALCHEMY_DATABASE_URI = normalize_database_url(
-        os.getenv("DATABASE_URL")
+    JWT_SECRET_KEY = os.getenv(
+        "JWT_SECRET_KEY"
     )
+
+    SQLALCHEMY_DATABASE_URI = (
+        normalize_database_url(
+            os.getenv("DATABASE_URL")
+        )
+    )
+
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(
-        hours=int(os.getenv("JWT_ACCESS_TOKEN_HOURS", "24"))
+        hours=int(
+            os.getenv(
+                "JWT_ACCESS_TOKEN_HOURS",
+                "24",
+            )
+        )
     )
 
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(
-        days=int(os.getenv("JWT_REFRESH_TOKEN_DAYS", "30"))
+        days=int(
+            os.getenv(
+                "JWT_REFRESH_TOKEN_DAYS",
+                "30",
+            )
+        )
     )
 
-    FRONTEND_ORIGINS = parse_comma_separated_values(
-        os.getenv(
-            "FRONTEND_ORIGIN",
-            "http://localhost:5173",
+    # This must be a flat list for Flask-CORS.
+    FRONTEND_ORIGINS = (
+        parse_comma_separated_values(
+            os.getenv(
+                "FRONTEND_ORIGINS",
+                "http://localhost:5173",
+            )
         )
     )
 
@@ -83,7 +126,10 @@ class Config:
         "memory://",
     )
 
-    CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
+    CLOUDINARY_URL = os.getenv(
+        "CLOUDINARY_URL"
+    )
+
     CLOUDINARY_FOLDER = os.getenv(
         "CLOUDINARY_FOLDER",
         "parrotv2/local/profiles",
@@ -103,4 +149,7 @@ class Config:
         )
     )
 
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_LEVEL = os.getenv(
+        "LOG_LEVEL",
+        "INFO",
+    )
