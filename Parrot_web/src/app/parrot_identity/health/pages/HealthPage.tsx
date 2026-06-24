@@ -98,7 +98,7 @@ function HealthPage() {
         </div>
 
         <div className="intro">
-          <p className="eyebrow">Parrot Web</p>
+          <p className="eyebrow">Parrot Ecommunications</p>
           <h1 id="page-title">Identity service status</h1>
           <p>
             Live connectivity check between this frontend and the Parrot
