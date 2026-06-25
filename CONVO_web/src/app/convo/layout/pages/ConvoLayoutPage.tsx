@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { useNavigate } from "react-router"
+import { useNavigate, useParams } from "react-router"
 
 import { ApiClientError } from "@/api/client"
 import AccountSettingsPage from "@/app/convo/account/pages/AccountSettingsPage"
@@ -15,6 +15,7 @@ import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 import ProfileWorkspacePage from "@/app/convo/profile/pages/ProfileWorkspacePage"
 import StoriesPage from "@/app/convo/stories/pages/StoriesPage"
 import { logout } from "@/app/convo_identity/auth/auth.api"
+import { userHomePath } from "@/app/convo_identity/auth/auth-routes"
 import {
   clearAuthSession,
   getAuthSession,
@@ -95,6 +96,7 @@ function savedSelectedContactId(prefix: string) {
 
 function ConvoLayoutPage() {
   const navigate = useNavigate()
+  const { username } = useParams()
   const [session] = useState(() => getAuthSession())
   const userStorage = userStoragePrefix(session)
   const [theme, setTheme] = useState(() => savedTheme(userStorage))
@@ -119,8 +121,13 @@ function ConvoLayoutPage() {
   useEffect(() => {
     if (!session) {
       navigate("/", { replace: true })
+      return
     }
-  }, [navigate, session])
+
+    if (username !== session.user.username) {
+      navigate(userHomePath(session), { replace: true })
+    }
+  }, [navigate, session, username])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme

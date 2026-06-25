@@ -42,7 +42,7 @@ export function getAuthSession(): AuthSession | null {
   try {
     const user = JSON.parse(storedUser) as LoginUser
 
-    if (!user.full_name || !user.email || !user.contact_number) {
+    if (!user.full_name || !user.username || !user.email || !user.contact_number) {
       clearAuthSession()
       return null
     }

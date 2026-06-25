@@ -9,6 +9,7 @@ export interface RegisteredUser {
 
 export interface LoginUser {
   full_name: string
+  username: string
   email: string
   contact_number: number
 }

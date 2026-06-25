@@ -3,6 +3,7 @@ import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
 import { login, registerAccount } from "@/app/convo_identity/auth/auth.api"
+import { userHomePath } from "@/app/convo_identity/auth/auth-routes"
 import {
   getAuthSession,
   saveAuthSession,
@@ -81,8 +82,10 @@ function WelcomePage() {
   const [notice, setNotice] = useState<Notice | null>(null)
 
   useEffect(() => {
-    if (getAuthSession()) {
-      navigate("/userstart", { replace: true })
+    const session = getAuthSession()
+
+    if (session) {
+      navigate(userHomePath(session), { replace: true })
     }
   }, [navigate])
 
@@ -145,7 +148,7 @@ function WelcomePage() {
       }
 
       saveAuthSession(response.data)
-      navigate("/userstart", { replace: true })
+      navigate(userHomePath(getAuthSession()), { replace: true })
     } catch (error) {
       setNotice(apiErrorNotice(error))
     } finally {
