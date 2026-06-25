@@ -63,7 +63,7 @@ def login():
             "access_token": access_token,
             "token_type": "Bearer",
             "expires_at": expires_at.isoformat(),
-            "user": user_details(user),
+            "user": user_details(user,include_username=True),
         },
         status_code=200,
     )

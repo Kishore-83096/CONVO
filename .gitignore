@@ -143,3 +143,5 @@ $RECYCLE.BIN/
 *.tar.gz
 *.tgz
 *.zip
+.kilo
+CONVO_TEMPLATE/
