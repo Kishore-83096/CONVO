@@ -1,10 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router"
 
 import ConvoLayoutPage from "@/app/convo/layout/pages/ConvoLayoutPage"
-import { WelcomePage } from "@/app/parrot_identity/auth"
-import HealthPage from "@/app/parrot_identity/health/pages/HealthPage"
+import { WelcomePage } from "@/app/convo_identity/auth"
+import HealthPage from "@/app/convo_identity/health/pages/HealthPage"
 
-function ParrotIdentityApp() {
+function ConvoIdentityApp() {
   return (
     <BrowserRouter>
       <Routes>
@@ -17,4 +17,4 @@ function ParrotIdentityApp() {
   )
 }
 
-export default ParrotIdentityApp
+export default ConvoIdentityApp

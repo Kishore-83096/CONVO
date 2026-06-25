@@ -1,4 +1,4 @@
-import type { AuthSession } from "@/app/parrot_identity/auth/auth-session"
+import type { AuthSession } from "@/app/convo_identity/auth/auth-session"
 import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 
 interface ProfileMenuProps {

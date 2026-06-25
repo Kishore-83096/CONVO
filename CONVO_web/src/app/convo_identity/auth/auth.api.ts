@@ -1,5 +1,5 @@
 import { apiRequest } from "@/api/client"
-import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
+import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
 import type {
   AccountCredentialsRequest,
   LoginData,
@@ -7,7 +7,7 @@ import type {
   RegisteredUser,
   RegisterRequest,
   ResetPasswordRequest,
-} from "@/app/parrot_identity/auth/auth.types"
+} from "@/app/convo_identity/auth/auth.types"
 
 export function registerAccount(request: RegisterRequest) {
   return apiRequest<RegisteredUser>("/auth/register", {

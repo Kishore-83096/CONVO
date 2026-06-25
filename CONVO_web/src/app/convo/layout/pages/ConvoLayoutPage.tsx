@@ -14,15 +14,15 @@ import { getProfile } from "@/app/convo/profile/profile.api"
 import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 import ProfileWorkspacePage from "@/app/convo/profile/pages/ProfileWorkspacePage"
 import StoriesPage from "@/app/convo/stories/pages/StoriesPage"
-import { logout } from "@/app/parrot_identity/auth/auth.api"
+import { logout } from "@/app/convo_identity/auth/auth.api"
 import {
   clearAuthSession,
   getAuthSession,
-} from "@/app/parrot_identity/auth/auth-session"
+} from "@/app/convo_identity/auth/auth-session"
 import {
   ContactDetailPage,
   ContactsSidebar,
-} from "@/app/parrot_identity/contacts"
+} from "@/app/convo_identity/contacts"
 import convoLogo from "@/assets/convo/CONVO.png"
 
 import "../css/ConvoLayout.css"

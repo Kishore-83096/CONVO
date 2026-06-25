@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
-import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
-import { listContacts } from "@/app/parrot_identity/contacts/contacts.api"
+import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
+import { listContacts } from "@/app/convo_identity/contacts/contacts.api"
 import type {
   ContactSummary,
   ProfilePicture,
-} from "@/app/parrot_identity/contacts/contacts.types"
+} from "@/app/convo_identity/contacts/contacts.types"
 
 import "../css/ContactsSidebar.css"
 

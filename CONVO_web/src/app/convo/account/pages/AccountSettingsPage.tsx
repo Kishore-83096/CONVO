@@ -6,15 +6,15 @@ import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 import {
   deleteAccount,
   resetPassword,
-} from "@/app/parrot_identity/auth/auth.api"
+} from "@/app/convo_identity/auth/auth.api"
 import {
   clearAuthSession,
   type AuthSession,
-} from "@/app/parrot_identity/auth/auth-session"
+} from "@/app/convo_identity/auth/auth-session"
 import type {
   AccountCredentialsRequest,
   ResetPasswordRequest,
-} from "@/app/parrot_identity/auth/auth.types"
+} from "@/app/convo_identity/auth/auth.types"
 
 interface AccountSettingsPageProps {
   accessToken: string

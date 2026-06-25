@@ -1,7 +1,7 @@
 import type {
   LoginData,
   LoginUser,
-} from "@/app/parrot_identity/auth/auth.types"
+} from "@/app/convo_identity/auth/auth.types"
 
 const accessTokenKey = "parrot_access_token"
 const tokenExpiresAtKey = "parrot_token_expires_at"

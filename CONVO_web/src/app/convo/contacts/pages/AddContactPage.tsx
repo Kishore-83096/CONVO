@@ -2,19 +2,19 @@ import { useCallback, useState, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
-import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
+import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
 import {
   addContact,
   searchContact,
-} from "@/app/parrot_identity/contacts/contacts.api"
+} from "@/app/convo_identity/contacts/contacts.api"
 import type {
   ContactSearchResult,
   ProfilePicture,
-} from "@/app/parrot_identity/contacts/contacts.types"
+} from "@/app/convo_identity/contacts/contacts.types"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-import "@/app/parrot_identity/contacts/css/ContactsSidebar.css"
+import "@/app/convo_identity/contacts/css/ContactsSidebar.css"
 
 interface AddContactPageProps {
   accessToken: string

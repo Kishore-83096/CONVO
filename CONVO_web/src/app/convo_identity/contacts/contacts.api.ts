@@ -6,7 +6,7 @@ import type {
   ContactSearchResult,
   ContactSummary,
   RenameContactRequest,
-} from "@/app/parrot_identity/contacts/contacts.types"
+} from "@/app/convo_identity/contacts/contacts.types"
 
 export function searchContact(
   request: ContactSearchRequest,

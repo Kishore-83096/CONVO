@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -86,17 +85,23 @@ function ImageCropper({
   onCancel,
   onCrop,
 }: ImageCropperProps) {
-  const imageUrl = useMemo(() => URL.createObjectURL(file), [file])
   const stageRef = useRef<HTMLDivElement | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
+  const [imageUrl, setImageUrl] = useState("")
   const [cropBox, setCropBox] = useState<CropBox | null>(null)
   const [error, setError] = useState("")
   const [isCropping, setIsCropping] = useState(false)
 
   useEffect(() => {
-    return () => URL.revokeObjectURL(imageUrl)
-  }, [imageUrl])
+    const nextImageUrl = URL.createObjectURL(file)
+
+    setImageUrl(nextImageUrl)
+    setCropBox(null)
+    setError("")
+
+    return () => URL.revokeObjectURL(nextImageUrl)
+  }, [file])
 
   const getBounds = () => {
     const stage = stageRef.current
@@ -133,18 +138,22 @@ function ImageCropper({
   }
 
   const initialiseCropBox = () => {
-    const bounds = getBounds()
+    window.requestAnimationFrame(() => {
+      const bounds = getBounds()
 
-    if (!bounds) {
-      return
-    }
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
+        setError("Unable to read the image preview size.")
+        return
+      }
 
-    const size = Math.min(bounds.width, bounds.height) * 0.58
+      const size = Math.min(bounds.width, bounds.height) * 0.58
 
-    setCropBox({
-      x: bounds.x + (bounds.width - size) / 2,
-      y: bounds.y + (bounds.height - size) / 2,
-      size,
+      setError("")
+      setCropBox({
+        x: bounds.x + (bounds.width - size) / 2,
+        y: bounds.y + (bounds.height - size) / 2,
+        size,
+      })
     })
   }
 
@@ -234,7 +243,7 @@ function ImageCropper({
     const bounds = getBounds()
     const imageElement = imageRef.current
 
-    if (!cropBox || !bounds || !imageElement) {
+    if (!imageUrl || !cropBox || !bounds || !imageElement) {
       setError("Choose a crop area first.")
       return
     }
@@ -316,13 +325,21 @@ function ImageCropper({
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        <img
-          ref={imageRef}
-          className="image-cropper-image"
-          src={imageUrl}
-          alt=""
-          onLoad={initialiseCropBox}
-        />
+        {imageUrl ? (
+          <img
+            ref={imageRef}
+            className="image-cropper-image"
+            src={imageUrl}
+            alt=""
+            onError={() => {
+              setCropBox(null)
+              setError("Unable to load this image. Choose a different JPEG or PNG.")
+            }}
+            onLoad={initialiseCropBox}
+          />
+        ) : (
+          <p className="image-cropper-status">Preparing image...</p>
+        )}
 
         {cropBox ? (
           <div

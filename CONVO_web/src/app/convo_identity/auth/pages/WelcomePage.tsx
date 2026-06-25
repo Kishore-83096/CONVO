@@ -2,12 +2,12 @@ import { useEffect, useState, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
-import { login, registerAccount } from "@/app/parrot_identity/auth/auth.api"
+import { login, registerAccount } from "@/app/convo_identity/auth/auth.api"
 import {
   getAuthSession,
   saveAuthSession,
-} from "@/app/parrot_identity/auth/auth-session"
-import type { LoginMethod } from "@/app/parrot_identity/auth/auth.types"
+} from "@/app/convo_identity/auth/auth-session"
+import type { LoginMethod } from "@/app/convo_identity/auth/auth.types"
 import convoLogo from "@/assets/convo/CONVO.png"
 import {
   Alert,

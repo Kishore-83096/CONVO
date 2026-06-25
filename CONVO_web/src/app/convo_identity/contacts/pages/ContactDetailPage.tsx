@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
-import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
+import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
 import {
   deleteContact,
   getContact,
   renameContact,
-} from "@/app/parrot_identity/contacts/contacts.api"
-import type { ContactDetail } from "@/app/parrot_identity/contacts/contacts.types"
+} from "@/app/convo_identity/contacts/contacts.api"
+import type { ContactDetail } from "@/app/convo_identity/contacts/contacts.types"
 
 import "../css/ContactDetailPage.css"
 

@@ -9,7 +9,7 @@ import EventsProfilePage from "@/app/convo/profile/pages/EventsProfilePage"
 import ProfilePage from "@/app/convo/profile/pages/ProfilePage"
 import ProfilePicturePage from "@/app/convo/profile/pages/ProfilePicturePage"
 import UpdateProfilePage from "@/app/convo/profile/pages/UpdateProfilePage"
-import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
+import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
 
 interface ProfileWorkspacePageProps {
   accessToken: string
