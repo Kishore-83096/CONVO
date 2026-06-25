@@ -1,4 +1,3 @@
-export { default as UserStartPage } from "./pages/UserStartPage"
 export { default as WelcomePage } from "./pages/WelcomePage"
 export * from "./auth.api"
 export * from "./auth-session"

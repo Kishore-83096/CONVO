@@ -1,110 +1,208 @@
 .contact-detail-page {
-  width: min(38rem, 100%);
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  color: var(--text-primary);
+}
+
+.contact-detail-page--state {
+  padding: 18px;
 }
 
 .contact-detail-state {
-  color: var(--muted-foreground);
+  padding: 22px;
+  color: var(--text-secondary);
 }
 
-.contact-detail-back {
-  padding: 0;
-  margin-bottom: 2rem;
-  border: 0;
-  color: var(--muted-foreground);
-  background: transparent;
-  font: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-
-.contact-detail-back:hover {
-  color: var(--foreground);
-}
-
-.contact-detail-header {
+.contact-detail-main-header {
   display: flex;
-  gap: 1.25rem;
+  width: 100%;
+  min-height: var(--top-bar-height);
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 22px;
+  background-color: var(--main-panel-background);
 }
 
-.contact-detail-header > img,
-.contact-detail-header > span {
-  width: 4rem;
-  height: 4rem;
-  flex: 0 0 auto;
+.contact-detail-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.contact-detail-identity img,
+.contact-detail-identity span {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
+  place-items: center;
+  border: 1px solid var(--divider);
   border-radius: 50%;
-}
-
-.contact-detail-header > img {
+  background-color: var(--avatar-background);
+  box-shadow: var(--glass-shadow);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 800;
   object-fit: cover;
 }
 
-.contact-detail-header > span {
+.contact-detail-identity h1 {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-detail-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.contact-detail-menu-wrap {
+  position: relative;
+}
+
+.contact-detail-icon-button,
+.contact-detail-close {
   display: grid;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
   place-items: center;
-  background: var(--muted);
-  font-size: 1.25rem;
-  font-weight: 600;
+  border: 0;
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
 }
 
-.contact-detail-header p,
-.contact-detail-header small {
-  color: var(--muted-foreground);
+.contact-detail-icon-button:hover,
+.contact-detail-close:hover {
+  background-color: var(--active-background);
 }
 
-.contact-detail-header p {
-  font-size: 0.875rem;
+.contact-detail-icon-button svg,
+.contact-detail-close svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
-.contact-detail-header h1 {
-  margin-top: 0.125rem;
-  font-size: 1.75rem;
-  font-weight: 600;
-  letter-spacing: -0.025em;
+.contact-detail-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(280px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid var(--divider);
+  border-radius: 7px;
+  background-color: var(--surface-background);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
-.contact-detail-data {
+.contact-detail-dropdown dl {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1rem;
-  margin-top: 2rem;
+  gap: 12px;
 }
 
-.contact-detail-data div {
-  padding: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+.contact-detail-dropdown dt,
+.contact-detail-menu-form label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.contact-detail-data dt {
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
+.contact-detail-dropdown dd {
+  overflow-wrap: anywhere;
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
-.contact-detail-data dd {
-  margin-top: 0.25rem;
-  font-size: 0.9rem;
-}
-
-.contact-detail-form {
+.contact-detail-menu-form {
   display: grid;
-  gap: 1rem;
-  padding-top: 2rem;
-  margin-top: 2rem;
-  border-top: 1px solid var(--border);
+  gap: 8px;
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--divider);
 }
 
-.contact-detail-form > div {
-  display: grid;
-  gap: 0.5rem;
+.contact-detail-menu-form input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--divider);
+  border-radius: 7px;
+  outline: none;
+  background-color: var(--soft-background);
+  color: var(--text-primary);
 }
 
-.contact-detail-delete {
-  margin-top: 1rem;
+.contact-detail-menu-form input:focus {
+  border-color: var(--strong-divider);
+  background-color: var(--surface-background);
 }
 
-@media (max-width: 540px) {
-  .contact-detail-data {
-    grid-template-columns: 1fr;
+.contact-detail-menu-form button,
+.contact-detail-menu-delete {
+  min-height: 38px;
+  border: 0;
+  border-radius: 7px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.contact-detail-menu-form button {
+  background-color: var(--send-button-background);
+  color: var(--send-button-text);
+}
+
+.contact-detail-menu-delete {
+  width: 100%;
+  margin-top: 10px;
+  background-color: transparent;
+  color: var(--danger-text);
+}
+
+.contact-detail-menu-delete:hover {
+  background-color: var(--hover-background);
+}
+
+.contact-detail-menu-form button:disabled,
+.contact-detail-menu-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.contact-detail-body {
+  min-height: 0;
+  flex: 1;
+  padding: 18px 22px;
+  overflow: auto;
+  background-color: var(--main-panel-background);
+}
+
+@media (max-width: 760px) {
+  .contact-detail-main-header {
+    padding-right: 12px;
+    padding-left: 16px;
   }
 }

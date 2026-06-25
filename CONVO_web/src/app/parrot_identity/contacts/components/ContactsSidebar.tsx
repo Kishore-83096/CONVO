@@ -1,34 +1,22 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
 import { clearAuthSession } from "@/app/parrot_identity/auth/auth-session"
-import {
-  addContact,
-  listContacts,
-  searchContact,
-} from "@/app/parrot_identity/contacts/contacts.api"
+import { listContacts } from "@/app/parrot_identity/contacts/contacts.api"
 import type {
-  ContactSearchResult,
   ContactSummary,
   ProfilePicture,
 } from "@/app/parrot_identity/contacts/contacts.types"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 
 import "../css/ContactsSidebar.css"
 
 interface ContactsSidebarProps {
   accessToken: string
+  onAddContact?: () => void
   onSelectContact: (contactId: number) => void
   refreshKey: number
-}
-
-interface SearchState {
-  contactNumber: string
-  message: string
-  result: ContactSearchResult
+  selectedContactId?: number | null
 }
 
 interface ContactAvatarProps {
@@ -48,15 +36,14 @@ function ContactAvatar({ name, picture }: ContactAvatarProps) {
 
 function ContactsSidebar({
   accessToken,
+  onAddContact,
   onSelectContact,
   refreshKey,
+  selectedContactId = null,
 }: ContactsSidebarProps) {
   const navigate = useNavigate()
   const [contacts, setContacts] = useState<ContactSummary[]>([])
-  const [searchState, setSearchState] = useState<SearchState | null>(null)
   const [isLoadingContacts, setIsLoadingContacts] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [message, setMessage] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
 
   const apiError = useCallback(
@@ -74,22 +61,10 @@ function ContactsSidebar({
     [navigate],
   )
 
-  const refreshContacts = useCallback(async () => {
-    setIsLoadingContacts(true)
-    setErrorMessage("")
-
-    try {
-      const response = await listContacts(accessToken)
-      setContacts(response.data ?? [])
-    } catch (error) {
-      setErrorMessage(apiError(error))
-    } finally {
-      setIsLoadingContacts(false)
-    }
-  }, [accessToken, apiError])
-
   useEffect(() => {
     let cancelled = false
+
+    setIsLoadingContacts(true)
 
     void listContacts(accessToken)
       .then((response) => {
@@ -113,149 +88,25 @@ function ContactsSidebar({
     }
   }, [accessToken, apiError, refreshKey])
 
-  const handleSearch = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const formData = new FormData(event.currentTarget)
-    const contactNumber = String(formData.get("contact_number") ?? "").trim()
-
-    setIsSubmitting(true)
-    setSearchState(null)
-    setMessage("")
-    setErrorMessage("")
-
-    try {
-      const response = await searchContact(
-        { contact_number: contactNumber },
-        accessToken,
-      )
-
-      if (response.data) {
-        setSearchState({
-          contactNumber,
-          message: response.message,
-          result: response.data,
-        })
-      }
-    } catch (error) {
-      setErrorMessage(apiError(error))
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  const handleAdd = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-
-    if (!searchState || searchState.message !== "Contact found.") {
-      return
-    }
-
-    const formData = new FormData(event.currentTarget)
-    const savedName = String(formData.get("saved_name") ?? "").trim()
-
-    setIsSubmitting(true)
-    setMessage("")
-    setErrorMessage("")
-
-    try {
-      const response = await addContact(
-        {
-          contact_number: searchState.contactNumber,
-          saved_name: savedName,
-        },
-        accessToken,
-      )
-
-      setMessage(response.message)
-      setSearchState(null)
-      await refreshContacts()
-    } catch (error) {
-      setErrorMessage(apiError(error))
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
   return (
     <div className="contacts-sidebar-content">
-      <section className="contacts-panel contacts-search-section">
-        <div className="contacts-heading">
-          <p>Contacts</p>
-          <h2>Search</h2>
-        </div>
-
-        <form className="contact-form" onSubmit={handleSearch}>
-          <div>
-            <Label htmlFor="search_contact_number">Contact number</Label>
-            <Input
-              id="search_contact_number"
-              name="contact_number"
-              inputMode="numeric"
-              pattern="[0-9]{10}"
-              placeholder="10-digit number"
-              required
-            />
-          </div>
-          <Button disabled={isSubmitting}>Search</Button>
-        </form>
-
-        {searchState && (
-          <div className="contact-search-result">
-            <div className="contact-search-identity">
-              <ContactAvatar
-                name={searchState.result.full_name}
-                picture={searchState.result.profile_picture}
-              />
-              <div>
-                <h3>{searchState.result.full_name}</h3>
-                <span>@{searchState.result.username}</span>
-              </div>
-            </div>
-            <p>{searchState.message}</p>
-
-            {searchState.message === "Contact found." && (
-              <form className="contact-form" onSubmit={handleAdd}>
-                <div>
-                  <Label htmlFor="add_saved_name">Save as</Label>
-                  <Input
-                    id="add_saved_name"
-                    name="saved_name"
-                    defaultValue={searchState.result.full_name}
-                    maxLength={100}
-                    required
-                  />
-                </div>
-                <Button disabled={isSubmitting}>Add contact</Button>
-              </form>
-            )}
-          </div>
-        )}
-
-        {message && <p className="contact-message">{message}</p>}
-        {errorMessage && (
-          <p className="contact-error" role="alert">
-            {errorMessage}
-          </p>
-        )}
-      </section>
-
-      <section className="contacts-panel contacts-saved-section">
-        <div className="contacts-heading contacts-heading--row">
-          <div>
-            <p>Your list</p>
-            <h2>Saved contacts</h2>
-          </div>
+      <section className="contacts-panel contacts-saved-section contacts-saved-section--top">
+        {onAddContact ? (
           <button
+            className="contacts-add-entry-button"
             type="button"
-            onClick={() => void refreshContacts()}
-            disabled={isLoadingContacts}
+            onClick={onAddContact}
           >
-            Refresh
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5V19" />
+              <path d="M5 12H19" />
+            </svg>
+            <span>Add Contact</span>
           </button>
-        </div>
+        ) : null}
 
         {isLoadingContacts ? (
-          <p className="contacts-state">Loading contacts…</p>
+          <p className="contacts-state">Loading contacts...</p>
         ) : contacts.length === 0 ? (
           <p className="contacts-state">No saved contacts yet.</p>
         ) : (
@@ -263,6 +114,9 @@ function ContactsSidebar({
             {contacts.map((contact) => (
               <li key={contact.id}>
                 <button
+                  className={`saved-contact-item ${
+                    selectedContactId === contact.id ? "selected" : ""
+                  }`}
                   type="button"
                   onClick={() => onSelectContact(contact.id)}
                 >
@@ -273,16 +127,18 @@ function ContactsSidebar({
                     />
                     <span>
                       <strong>{contact.saved_name}</strong>
-                      <small>Saved contact</small>
                     </span>
-                  </span>
-                  <span className="saved-contact-arrow" aria-hidden="true">
-                    ›
                   </span>
                 </button>
               </li>
             ))}
           </ul>
+        )}
+
+        {errorMessage && (
+          <p className="contact-error" role="alert">
+            {errorMessage}
+          </p>
         )}
       </section>
     </div>

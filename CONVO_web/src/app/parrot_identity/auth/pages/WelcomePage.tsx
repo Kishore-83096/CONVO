@@ -8,7 +8,7 @@ import {
   saveAuthSession,
 } from "@/app/parrot_identity/auth/auth-session"
 import type { LoginMethod } from "@/app/parrot_identity/auth/auth.types"
-import parrotIcon from "@/assets/icons/ParrotIcon_3D_effect.svg"
+import convoLogo from "@/assets/convo/CONVO.png"
 import {
   Alert,
   AlertDescription,
@@ -37,7 +37,7 @@ interface Notice {
 
 const loginPlaceholders: Record<LoginMethod, string> = {
   username: "your_username",
-  email: "you@parrot.com",
+  email: "you@convo.app",
   contact_number: "10-digit contact number",
 }
 
@@ -115,7 +115,7 @@ function WelcomePage() {
         title: "Account created",
         message: response.message,
         details: [
-          `Parrot email: ${response.data.email}`,
+          `CONVO email: ${response.data.email}`,
           `Contact number: ${response.data.contact_number}`,
         ],
       })
@@ -171,10 +171,10 @@ function WelcomePage() {
               className="welcome-brand"
               type="button"
               onClick={() => changeTab("features")}
-              aria-label="Show Parrot features"
+              aria-label="Show CONVO features"
             >
-              <img className="welcome-logo" src={parrotIcon} alt="" />
-              <span>Parrot Ecommunications</span>
+              <img className="welcome-logo" src={convoLogo} alt="" />
+              <span>CONVO</span>
             </button>
 
             <TabsList className="auth-tabs-list" variant="line">
@@ -187,23 +187,23 @@ function WelcomePage() {
         <main className="welcome-container welcome-main">
           <TabsContent className="features-view" value="features">
             <section className="welcome-intro">
-              <p className="welcome-eyebrow">Welcome to Parrot</p>
+              <p className="welcome-eyebrow">Welcome to CONVO</p>
               <h1 className="welcome-title">
-                One identity for your Parrot world.
+                One quiet place for your conversations.
               </h1>
               <p className="welcome-description">
-                Create your identity, build your profile, and keep the people
-                important to you close.
+                Create your identity, shape your profile, and keep the people
+                important to you close inside one clean workspace.
               </p>
             </section>
 
-            <section className="features-grid" aria-label="Parrot features">
+            <section className="features-grid" aria-label="CONVO features">
               <article>
                 <span>01</span>
                 <h2>Your identity</h2>
                 <p>
-                  Get a Parrot email and contact number when you create an
-                  account.
+                  Get your CONVO identity and contact number when you create
+                  an account.
                 </p>
               </article>
               <article>
@@ -218,7 +218,7 @@ function WelcomePage() {
                 <span>03</span>
                 <h2>Your contacts</h2>
                 <p>
-                  Find Parrot users and manage the people you want to stay
+                  Find CONVO users and manage the people you want to stay
                   connected with.
                 </p>
               </article>
@@ -248,10 +248,13 @@ function WelcomePage() {
                 onClick={() => changeTab("features")}
                 aria-label="Close registration"
               >
-                ×
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6L18 18" />
+                  <path d="M18 6L6 18" />
+                </svg>
               </button>
               <div className="auth-heading">
-                <p>Join Parrot</p>
+                <p>Join CONVO</p>
                 <h1>Create your identity</h1>
               </div>
               <form className="auth-form" onSubmit={handleRegister}>
@@ -311,7 +314,7 @@ function WelcomePage() {
                 </div>
 
                 <Button className="auth-submit" disabled={isSubmitting}>
-                  {isSubmitting ? "Creating account…" : "Create account"}
+                  {isSubmitting ? "Creating account..." : "Create account"}
                 </Button>
               </form>
               <p className="auth-switch">
@@ -331,11 +334,14 @@ function WelcomePage() {
                 onClick={() => changeTab("features")}
                 aria-label="Close login"
               >
-                ×
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6L18 18" />
+                  <path d="M18 6L6 18" />
+                </svg>
               </button>
               <div className="auth-heading">
                 <p>Welcome back</p>
-                <h1>Login to Parrot</h1>
+                <h1>Login to CONVO</h1>
               </div>
               <form className="auth-form" onSubmit={handleLogin}>
                 <div className="auth-field">
@@ -350,7 +356,7 @@ function WelcomePage() {
                     }}
                   >
                     <option value="username">Username</option>
-                    <option value="email">Parrot email</option>
+                    <option value="email">CONVO email</option>
                     <option value="contact_number">Contact number</option>
                   </select>
                 </div>
@@ -388,11 +394,11 @@ function WelcomePage() {
                 </div>
 
                 <Button className="auth-submit" disabled={isSubmitting}>
-                  {isSubmitting ? "Signing in…" : "Login"}
+                  {isSubmitting ? "Signing in..." : "Login"}
                 </Button>
               </form>
               <p className="auth-switch">
-                New to Parrot?{" "}
+                New to CONVO?{" "}
                 <button type="button" onClick={() => changeTab("register")}>
                   Create account
                 </button>

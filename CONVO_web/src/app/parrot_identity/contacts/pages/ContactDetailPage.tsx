@@ -9,9 +9,6 @@ import {
   renameContact,
 } from "@/app/parrot_identity/contacts/contacts.api"
 import type { ContactDetail } from "@/app/parrot_identity/contacts/contacts.types"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 
 import "../css/ContactDetailPage.css"
 
@@ -32,6 +29,7 @@ function ContactDetailPage({
   const [contact, setContact] = useState<ContactDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [message, setMessage] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
 
@@ -52,6 +50,9 @@ function ContactDetailPage({
 
   useEffect(() => {
     let cancelled = false
+
+    setIsLoading(true)
+    setErrorMessage("")
 
     void getContact(contactId, accessToken)
       .then((response) => {
@@ -114,14 +115,6 @@ function ContactDetailPage({
       return
     }
 
-    const shouldDelete = window.confirm(
-      `Remove ${contact.saved_name} from your saved contacts?`,
-    )
-
-    if (!shouldDelete) {
-      return
-    }
-
     setIsUpdating(true)
     setMessage("")
     setErrorMessage("")
@@ -138,14 +131,17 @@ function ContactDetailPage({
   }
 
   if (isLoading) {
-    return <p className="contact-detail-state">Loading contact…</p>
+    return <p className="contact-detail-state">Loading contact...</p>
   }
 
   if (!contact) {
     return (
-      <section className="contact-detail-page">
-        <button className="contact-detail-back" type="button" onClick={onBack}>
-          ← Back
+      <section className="contact-detail-page contact-detail-page--state">
+        <button className="contact-detail-close" type="button" onClick={onBack}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6L18 18" />
+            <path d="M18 6L6 18" />
+          </svg>
         </button>
         <p className="contact-error">{errorMessage || "Contact not found."}</p>
       </section>
@@ -154,63 +150,97 @@ function ContactDetailPage({
 
   return (
     <section className="contact-detail-page">
-      <button className="contact-detail-back" type="button" onClick={onBack}>
-        ← Saved contacts
-      </button>
-
-      <header className="contact-detail-header">
-        {contact.profile_picture ? (
-          <img src={contact.profile_picture.url} alt="" />
-        ) : (
-          <span aria-hidden="true">{contact.saved_name.charAt(0)}</span>
-        )}
-        <div>
-          <p>{contact.full_name}</p>
+      <header className="contact-detail-main-header">
+        <div className="contact-detail-identity">
+          {contact.profile_picture ? (
+            <img src={contact.profile_picture.url} alt="" />
+          ) : (
+            <span aria-hidden="true">{contact.saved_name.charAt(0)}</span>
+          )}
           <h1>{contact.saved_name}</h1>
-          <small>@{contact.username}</small>
         </div>
+
+        <nav className="contact-detail-actions" aria-label="Contact actions">
+          <div className="contact-detail-menu-wrap">
+            <button
+              className="contact-detail-icon-button"
+              type="button"
+              aria-label="Open contact properties"
+              aria-expanded={isMenuOpen}
+              onClick={() => setIsMenuOpen((current) => !current)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="5" r="1" />
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="12" cy="19" r="1" />
+              </svg>
+            </button>
+
+            {isMenuOpen ? (
+              <div className="contact-detail-dropdown" role="menu">
+                <dl>
+                  <div>
+                    <dt>Full name</dt>
+                    <dd>{contact.full_name}</dd>
+                  </div>
+                  <div>
+                    <dt>Username</dt>
+                    <dd>@{contact.username}</dd>
+                  </div>
+                  <div>
+                    <dt>Contact number</dt>
+                    <dd>{contact.contact_number}</dd>
+                  </div>
+                </dl>
+
+                <form className="contact-detail-menu-form" onSubmit={handleRename}>
+                  <label htmlFor="detail_saved_name">Saved name</label>
+                  <input
+                    id="detail_saved_name"
+                    name="saved_name"
+                    defaultValue={contact.saved_name}
+                    maxLength={100}
+                    required
+                  />
+                  <button type="submit" disabled={isUpdating}>
+                    Rename
+                  </button>
+                </form>
+
+                <button
+                  className="contact-detail-menu-delete"
+                  type="button"
+                  disabled={isUpdating}
+                  onClick={() => void handleDelete()}
+                >
+                  Delete contact
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            className="contact-detail-icon-button"
+            type="button"
+            aria-label="Close contact"
+            onClick={onBack}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6L18 18" />
+              <path d="M18 6L6 18" />
+            </svg>
+          </button>
+        </nav>
       </header>
 
-      <dl className="contact-detail-data">
-        <div>
-          <dt>Contact number</dt>
-          <dd>{contact.contact_number}</dd>
-        </div>
-        <div>
-          <dt>Contact ID</dt>
-          <dd>{contact.id}</dd>
-        </div>
-      </dl>
-
-      <form className="contact-detail-form" onSubmit={handleRename}>
-        <div>
-          <Label htmlFor="detail_saved_name">Saved name</Label>
-          <Input
-            id="detail_saved_name"
-            name="saved_name"
-            defaultValue={contact.saved_name}
-            maxLength={100}
-            required
-          />
-        </div>
-        <Button disabled={isUpdating}>Rename contact</Button>
-      </form>
-
-      <Button
-        className="contact-detail-delete"
-        variant="destructive"
-        onClick={() => void handleDelete()}
-        disabled={isUpdating}
-      >
-        Delete contact
-      </Button>
-
-      {message && <p className="contact-message">{message}</p>}
-      {errorMessage && (
-        <p className="contact-error" role="alert">
-          {errorMessage}
-        </p>
-      )}
+      <div className="contact-detail-body">
+        {message ? <p className="contact-message">{message}</p> : null}
+        {errorMessage ? (
+          <p className="contact-error" role="alert">
+            {errorMessage}
+          </p>
+        ) : null}
+      </div>
     </section>
   )
 }
