@@ -1,25 +1,48 @@
+import { lazy, Suspense } from "react"
 import { BrowserRouter, Navigate, Route, Routes } from "react-router"
 
-import ConvoLayoutPage from "@/app/convo/layout/pages/ConvoLayoutPage"
-import { WelcomePage } from "@/app/convo_identity/auth"
 import { userHomePath } from "@/app/convo_identity/auth/auth-routes"
 import { getAuthSession } from "@/app/convo_identity/auth/auth-session"
-import HealthPage from "@/app/convo_identity/health/pages/HealthPage"
+import { NotFoundPage, PublicPage } from "@/app/public/PublicPages"
+import SeoMeta from "@/app/seo/SeoMeta"
+
+const ConvoLayoutPage = lazy(() => import("@/app/convo/layout/pages/ConvoLayoutPage"))
+const HealthPage = lazy(() => import("@/app/convo_identity/health/pages/HealthPage"))
+const WelcomePage = lazy(() => import("@/app/convo_identity/auth/pages/WelcomePage"))
 
 function UserStartRedirect() {
-  return <Navigate to={userHomePath(getAuthSession())} replace />
+  return (
+    <>
+      <SeoMeta
+        canonicalPath="/userstart"
+        description="CONVO private application redirect."
+        robots="noindex, nofollow"
+        title="CONVO App Redirect"
+      />
+      <Navigate to={userHomePath(getAuthSession())} replace />
+    </>
+  )
 }
 
 function ConvoIdentityApp() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<WelcomePage />} />
-        <Route path="/health/all" element={<HealthPage />} />
-        <Route path="/userstart" element={<UserStartRedirect />} />
-        <Route path="/:username" element={<ConvoLayoutPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={null}>
+        <Routes>
+          <Route path="/" element={<PublicPage pageKey="home" />} />
+          <Route path="/features" element={<PublicPage pageKey="features" />} />
+          <Route path="/security" element={<PublicPage pageKey="security" />} />
+          <Route path="/privacy" element={<PublicPage pageKey="privacy" />} />
+          <Route path="/about" element={<PublicPage pageKey="about" />} />
+          <Route path="/contact" element={<PublicPage pageKey="contact" />} />
+          <Route path="/login" element={<WelcomePage initialTab="login" />} />
+          <Route path="/register" element={<WelcomePage initialTab="register" />} />
+          <Route path="/health/all" element={<HealthPage />} />
+          <Route path="/userstart" element={<UserStartRedirect />} />
+          <Route path="/:username" element={<ConvoLayoutPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

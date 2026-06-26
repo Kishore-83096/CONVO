@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://replace-with-production-domain.com/sitemap.xml

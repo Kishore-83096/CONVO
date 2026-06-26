@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { Menu, MessageCircle, Sparkles, UsersRound } from "lucide-react"
 import { useNavigate, useParams } from "react-router"
 
 import { ApiClientError } from "@/api/client"
@@ -7,6 +8,7 @@ import { demoChats, type ChatSummary } from "@/app/convo/chats/chats.api"
 import ChatListPage from "@/app/convo/chats/pages/ChatListPage"
 import ConversationPage from "@/app/convo/chats/pages/ConversationPage"
 import AddContactPage from "@/app/convo/contacts/pages/AddContactPage"
+import ConfirmActionModal from "@/app/convo/layout/components/ConfirmActionModal"
 import ProfileMenu from "@/app/convo/layout/components/ProfileMenu"
 import AppearancePage from "@/app/convo/layout/pages/AppearancePage"
 import EmptyPage from "@/app/convo/layout/pages/EmptyPage"
@@ -25,6 +27,7 @@ import {
   ContactsSidebar,
 } from "@/app/convo_identity/contacts"
 import convoLogo from "@/assets/convo/CONVO.png"
+import SeoMeta from "@/app/seo/SeoMeta"
 
 import "../css/ConvoLayout.css"
 
@@ -34,14 +37,14 @@ type MobilePanel = "sidebar" | "main"
 
 const themes = ["light", "dark", "blue", "pink", "lavender", "mint", "sunset", "aurora"]
 const themeOptions = [
-  { id: "light", name: "Light", colors: ["#ffffff", "#f3f5f8", "#22262d"] },
-  { id: "dark", name: "Dark", colors: ["#11151b", "#1b2029", "#f1f4f8"] },
-  { id: "blue", name: "Blue", colors: ["#eef6ff", "#b9d8f7", "#2d70b8"] },
-  { id: "pink", name: "Pink", colors: ["#fff2f7", "#e9bdd2", "#b85880"] },
-  { id: "lavender", name: "Lavender", colors: ["#f8f3ff", "#cfbde9", "#7759b1"] },
-  { id: "mint", name: "Mint", colors: ["#effaf6", "#b9ddcf", "#4d9278"] },
-  { id: "sunset", name: "Sunset", colors: ["#fff8ee", "#e7c79a", "#b67832"] },
-  { id: "aurora", name: "Aurora", colors: ["#effbfc", "#b7dade", "#438993"] },
+  { id: "light", name: "Light", colors: ["#fbfcff", "#e8edf5", "#2563eb"] },
+  { id: "dark", name: "Dark", colors: ["#10141c", "#1f2937", "#8ab4ff"] },
+  { id: "blue", name: "Blue", colors: ["#edf7ff", "#c5ddff", "#2563eb"] },
+  { id: "pink", name: "Pink", colors: ["#fff1f6", "#f8c7dc", "#d94683"] },
+  { id: "lavender", name: "Lavender", colors: ["#f7f2ff", "#d8c7ff", "#7c3aed"] },
+  { id: "mint", name: "Mint", colors: ["#edfbf6", "#b9ead9", "#059669"] },
+  { id: "sunset", name: "Sunset", colors: ["#fff7ed", "#fed7aa", "#ea580c"] },
+  { id: "aurora", name: "Aurora", colors: ["#ecfeff", "#bbf7d0", "#0891b2"] },
 ]
 
 function userStoragePrefix(session: ReturnType<typeof getAuthSession>) {
@@ -116,6 +119,7 @@ function ConvoLayoutPage() {
   const [isProfileLoading, setIsProfileLoading] = useState(true)
   const [profileError, setProfileError] = useState("")
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false)
   const [logoutError, setLogoutError] = useState("")
 
   useEffect(() => {
@@ -262,11 +266,18 @@ function ConvoLayoutPage() {
       )
     } finally {
       setIsLoggingOut(false)
+      setIsLogoutConfirmOpen(false)
     }
   }
 
   return (
     <div className="desktop-layout" id="convoLayout">
+      <SeoMeta
+        canonicalPath={`/${session.user.username}`}
+        description="Private CONVO messaging workspace."
+        robots="noindex, nofollow"
+        title="CONVO Private Workspace"
+      />
       <aside className="sidebar" aria-label="CONVO sidebar">
         <header className="sidebar-header">
           <div className="brand-lockup">
@@ -286,10 +297,7 @@ function ConvoLayoutPage() {
               title="Contacts"
               onClick={() => openSidebarView("contacts")}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 5V19" />
-                <path d="M5 12H19" />
-              </svg>
+              <UsersRound aria-hidden="true" />
             </button>
 
             <button
@@ -300,11 +308,7 @@ function ConvoLayoutPage() {
               aria-label="Open profile menu"
               onClick={() => openSidebarView("profileMenu")}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 7H20" />
-                <path d="M4 12H20" />
-                <path d="M4 17H20" />
-              </svg>
+              <Menu aria-hidden="true" />
             </button>
           </nav>
         </header>
@@ -352,7 +356,7 @@ function ConvoLayoutPage() {
               onOpenAppearance={() => openMainView("appearance")}
               onOpenAccount={() => openMainView("account")}
               onOpenProfile={() => openMainView("profile")}
-              onLogout={() => void handleLogout()}
+              onLogout={() => setIsLogoutConfirmOpen(true)}
             />
           ) : null}
         </div>
@@ -363,9 +367,7 @@ function ConvoLayoutPage() {
             type="button"
             onClick={() => openSidebarView("chats")}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 5H20V16H9L4 20V5Z" />
-            </svg>
+            <MessageCircle aria-hidden="true" />
             <span>Chats</span>
           </button>
 
@@ -374,10 +376,7 @@ function ConvoLayoutPage() {
             type="button"
             onClick={() => openSidebarView("stories")}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="8" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
+            <Sparkles aria-hidden="true" />
             <span>Stories</span>
           </button>
         </footer>
@@ -425,6 +424,17 @@ function ConvoLayoutPage() {
           />
         ) : null}
       </main>
+
+      <ConfirmActionModal
+        confirmLabel="Logout"
+        description="You will be signed out of this CONVO session and returned to the welcome screen."
+        isBusy={isLoggingOut}
+        isOpen={isLogoutConfirmOpen}
+        title="Logout from CONVO?"
+        tone="warning"
+        onCancel={() => setIsLogoutConfirmOpen(false)}
+        onConfirm={() => void handleLogout()}
+      />
     </div>
   )
 }

@@ -1,0 +1,18 @@
+{
+  "name": "CONVO",
+  "short_name": "CONVO",
+  "description": "CONVO is a modern real-time messaging application for private conversations, instant message delivery, contact management, and simple communication.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fbfcff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

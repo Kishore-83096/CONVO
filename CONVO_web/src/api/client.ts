@@ -55,7 +55,7 @@ export async function apiRequest<T>(
     })
   } catch {
     throw new ApiClientError(
-      "Unable to connect to the Parrot Identity service.",
+      "Unable to connect to the CONVO Identity service.",
       0,
     )
   }

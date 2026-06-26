@@ -1,4 +1,5 @@
 import { useCallback, useState, type FormEvent } from "react"
+import { ChevronLeft, Search } from "lucide-react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
@@ -141,9 +142,7 @@ function AddContactPage({
           aria-label="Back to saved contacts"
           onClick={onViewContacts}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M15 6L9 12L15 18" />
-          </svg>
+          <ChevronLeft aria-hidden="true" />
         </button>
       </div>
 
@@ -166,10 +165,7 @@ function AddContactPage({
                 aria-label="Search contact"
                 disabled={isSubmitting}
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="11" cy="11" r="7" />
-                  <path d="M16 16L21 21" />
-                </svg>
+                <Search aria-hidden="true" />
               </button>
             </span>
           </div>

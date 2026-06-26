@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
+import ConfirmActionModal from "@/app/convo/layout/components/ConfirmActionModal"
 import { clearAuthSession } from "@/app/convo_identity/auth/auth-session"
 import {
   deleteContact,
@@ -30,6 +31,7 @@ function ContactDetailPage({
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false)
   const [message, setMessage] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
 
@@ -107,6 +109,7 @@ function ContactDetailPage({
       setErrorMessage(apiError(error))
     } finally {
       setIsUpdating(false)
+      setIsDeleteConfirmOpen(false)
     }
   }
 
@@ -211,7 +214,10 @@ function ContactDetailPage({
                   className="contact-detail-menu-delete"
                   type="button"
                   disabled={isUpdating}
-                  onClick={() => void handleDelete()}
+                  onClick={() => {
+                    setIsMenuOpen(false)
+                    setIsDeleteConfirmOpen(true)
+                  }}
                 >
                   Delete contact
                 </button>
@@ -241,6 +247,17 @@ function ContactDetailPage({
           </p>
         ) : null}
       </div>
+
+      <ConfirmActionModal
+        confirmLabel="Delete contact"
+        description={`This will remove ${contact.saved_name} from your saved contacts. You can add them again later if needed.`}
+        isBusy={isUpdating}
+        isOpen={isDeleteConfirmOpen}
+        title="Delete this contact?"
+        tone="danger"
+        onCancel={() => setIsDeleteConfirmOpen(false)}
+        onConfirm={() => void handleDelete()}
+      />
     </section>
   )
 }

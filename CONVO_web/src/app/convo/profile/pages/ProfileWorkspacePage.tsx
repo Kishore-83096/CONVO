@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { X } from "lucide-react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
@@ -100,10 +101,7 @@ function ProfileWorkspacePage({
             aria-label="Close"
             onClick={onClose}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6L18 18" />
-              <path d="M18 6L6 18" />
-            </svg>
+            <X aria-hidden="true" />
           </button>
         </div>
 

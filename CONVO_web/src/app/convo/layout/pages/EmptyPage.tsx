@@ -1,10 +1,7 @@
-import convoLogo from "@/assets/convo/CONVO.png"
-
 function EmptyPage() {
   return (
-    <section className="main-view active">
+    <section className="main-view active" id="emptyMainView">
       <div className="empty-main-content">
-        <img className="empty-main-icon" src={convoLogo} alt="CONVO logo" />
         <h2>CONVO</h2>
         <p>Select a chat, profile, or settings page.</p>
       </div>

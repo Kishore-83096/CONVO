@@ -1,3 +1,5 @@
+import { Check, X } from "lucide-react"
+
 interface ThemeOption {
   id: string
   name: string
@@ -30,10 +32,7 @@ function AppearancePage({
             aria-label="Close"
             onClick={onClose}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6L18 18" />
-              <path d="M18 6L6 18" />
-            </svg>
+            <X aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -60,6 +59,9 @@ function AppearancePage({
                   ))}
                 </span>
                 <span>{theme.name}</span>
+                {currentTheme === theme.id ? (
+                  <Check className="appearance-theme-check" aria-hidden="true" />
+                ) : null}
               </button>
             ))}
           </div>

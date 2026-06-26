@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react"
+import { X } from "lucide-react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
+import ConfirmActionModal from "@/app/convo/layout/components/ConfirmActionModal"
 import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 import {
   deleteAccount,
@@ -65,6 +67,8 @@ function AccountSettingsPage({
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [deleteCredentials, setDeleteCredentials] =
+    useState<AccountCredentialsRequest | null>(null)
   const identity = profile?.identity
   const username = identity?.username ?? ""
   const email = identity?.email ?? session.user.email
@@ -115,17 +119,28 @@ function AccountSettingsPage({
     event.preventDefault()
     const formData = new FormData(event.currentTarget)
 
+    setDeleteCredentials(credentialsFromForm(formData))
+    setMessage("")
+    setError("")
+  }
+
+  const confirmDeleteAccount = async () => {
+    if (!deleteCredentials) {
+      return
+    }
+
     setIsSubmitting(true)
     setMessage("")
     setError("")
 
     try {
-      await deleteAccount(credentialsFromForm(formData), accessToken)
+      await deleteAccount(deleteCredentials, accessToken)
       handleSessionRevoked()
     } catch (submitError) {
       setError(accountError(submitError))
     } finally {
       setIsSubmitting(false)
+      setDeleteCredentials(null)
     }
   }
 
@@ -142,10 +157,7 @@ function AccountSettingsPage({
             aria-label="Close"
             onClick={onClose}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6L18 18" />
-              <path d="M18 6L6 18" />
-            </svg>
+            <X aria-hidden="true" />
           </button>
         </div>
 
@@ -259,6 +271,17 @@ function AccountSettingsPage({
           </p>
         ) : null}
       </div>
+
+      <ConfirmActionModal
+        confirmLabel="Delete account"
+        description="This will permanently delete your account and sign you out. This action cannot be undone."
+        isBusy={isSubmitting}
+        isOpen={deleteCredentials !== null}
+        title="Delete your CONVO account?"
+        tone="danger"
+        onCancel={() => setDeleteCredentials(null)}
+        onConfirm={() => void confirmDeleteAccount()}
+      />
     </section>
   )
 }

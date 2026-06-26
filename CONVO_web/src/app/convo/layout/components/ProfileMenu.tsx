@@ -1,3 +1,5 @@
+import { LogOut, Palette, SlidersHorizontal, UserRound } from "lucide-react"
+
 import type { AuthSession } from "@/app/convo_identity/auth/auth-session"
 import type { CompleteProfile } from "@/app/convo/profile/profile.types"
 
@@ -79,10 +81,7 @@ function ProfileMenu({
         type="button"
         onClick={onOpenProfile}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="8" r="4" />
-          <path d="M4 21C4 16.6 7.6 13 12 13C16.4 13 20 16.6 20 21" />
-        </svg>
+        <UserRound aria-hidden="true" />
         <span>Profile</span>
       </button>
 
@@ -93,14 +92,7 @@ function ProfileMenu({
         type="button"
         onClick={onOpenAccount}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 6H20" />
-          <path d="M4 12H20" />
-          <path d="M4 18H20" />
-          <circle cx="9" cy="6" r="2" />
-          <circle cx="15" cy="12" r="2" />
-          <circle cx="10" cy="18" r="2" />
-        </svg>
+        <SlidersHorizontal aria-hidden="true" />
         <span>Account Settings</span>
       </button>
 
@@ -112,13 +104,7 @@ function ProfileMenu({
         aria-label={`Open appearance settings. Current theme: ${currentTheme}`}
         onClick={onOpenAppearance}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="9" cy="10" r="1" />
-          <circle cx="13" cy="8" r="1" />
-          <circle cx="15" cy="13" r="1" />
-          <path d="M11 16H12" />
-        </svg>
+        <Palette aria-hidden="true" />
         <span>Appearance</span>
       </button>
 
@@ -128,11 +114,7 @@ function ProfileMenu({
         disabled={isLoggingOut}
         onClick={onLogout}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M10 4H5V20H10" />
-          <path d="M14 8L18 12L14 16" />
-          <path d="M18 12H9" />
-        </svg>
+        <LogOut aria-hidden="true" />
         <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
       </button>
 

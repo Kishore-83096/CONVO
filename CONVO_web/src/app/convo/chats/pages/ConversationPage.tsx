@@ -1,3 +1,5 @@
+import { MessageCircle, MoreVertical, Plus, SendHorizontal, X } from "lucide-react"
+
 import type { ChatSummary } from "@/app/convo/chats/chats.api"
 
 interface ConversationPageProps {
@@ -28,11 +30,7 @@ function ConversationPage({ chat, onClose }: ConversationPageProps) {
 
         <nav className="conversation-header-actions">
           <button className="main-icon-button" type="button" aria-label="Contact actions">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="5" r="1" />
-              <circle cx="12" cy="12" r="1" />
-              <circle cx="12" cy="19" r="1" />
-            </svg>
+            <MoreVertical aria-hidden="true" />
           </button>
           <button
             className="main-icon-button close-conversation-button"
@@ -40,10 +38,7 @@ function ConversationPage({ chat, onClose }: ConversationPageProps) {
             aria-label="Close conversation"
             onClick={onClose}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6L18 18" />
-              <path d="M18 6L6 18" />
-            </svg>
+            <X aria-hidden="true" />
           </button>
         </nav>
       </header>
@@ -65,22 +60,14 @@ function ConversationPage({ chat, onClose }: ConversationPageProps) {
 
       <footer className="message-composer">
         <button className="composer-icon-button" type="button" aria-label="Attach">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 5V19" />
-            <path d="M5 12H19" />
-          </svg>
+          <Plus aria-hidden="true" />
         </button>
         <label className="message-input-area" htmlFor="messageInput">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 5H20V16H9L4 20V5Z" />
-          </svg>
+          <MessageCircle aria-hidden="true" />
           <input id="messageInput" type="text" placeholder="Type a message" />
         </label>
         <button className="composer-icon-button send-button" type="button" aria-label="Send">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 4L21 12L3 20L6 12L3 4Z" />
-            <path d="M6 12H21" />
-          </svg>
+          <SendHorizontal aria-hidden="true" />
         </button>
       </footer>
     </section>

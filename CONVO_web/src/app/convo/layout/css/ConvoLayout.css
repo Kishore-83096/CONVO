@@ -1,5 +1,5 @@
 /* ==================================================
-   KONVO UNIFORM THEMES
+   CONVO UNIFORM THEMES
    Each theme uses one restrained colour family across the whole app.
 ================================================== */
 
@@ -1743,7 +1743,7 @@ html[data-theme="dark"] .attachment-dropup {
 
 
 /* ==================================================
-   KONVO BRAND ICON
+   CONVO BRAND ICON
 ================================================== */
 
 .brand-lockup {
@@ -1960,7 +1960,7 @@ html[data-theme="dark"] .template-toast {
 }
 
 /* ==================================================
-   KONVO LAYOUT HTML TEMPLATE HELPERS
+   CONVO LAYOUT HTML TEMPLATE HELPERS
 ================================================== */
 
 .template-route-note,
@@ -3151,6 +3151,462 @@ img.profile-page-avatar {
   }
 
   .convo-profile-row-actions {
+    width: 100%;
+  }
+}
+
+/* ==================================================
+   MODERN THEME REFRESH
+================================================== */
+
+:root {
+  --app-gradient:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--send-button-background) 12%, transparent), transparent 32rem),
+    linear-gradient(135deg, #fbfcff 0%, #eef2f7 100%);
+  --page-background: #f6f8fb;
+  --sidebar-panel-background: rgba(255, 255, 255, 0.86);
+  --main-panel-background: rgba(244, 247, 251, 0.94);
+  --surface-background: rgba(255, 255, 255, 0.76);
+  --soft-background: rgba(241, 245, 249, 0.78);
+  --hover-background: rgba(226, 232, 240, 0.78);
+  --active-background: rgba(219, 234, 254, 0.72);
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #7b8493;
+  --divider: rgba(15, 23, 42, 0.11);
+  --strong-divider: rgba(37, 99, 235, 0.32);
+  --received-message-background: rgba(255, 255, 255, 0.9);
+  --sent-message-background: #dbeafe;
+  --avatar-background: #eef4ff;
+  --send-button-background: #2563eb;
+  --send-button-text: #ffffff;
+  --danger-text: #dc2626;
+  --glass-shadow: 0 18px 46px rgba(15, 23, 42, 0.1);
+  --icon-surface: color-mix(in srgb, var(--surface-background) 82%, var(--send-button-background) 18%);
+  --icon-ring: color-mix(in srgb, var(--send-button-background) 36%, transparent);
+}
+
+html[data-theme="dark"] {
+  --app-gradient:
+    radial-gradient(circle at top left, color-mix(in srgb, #8ab4ff 16%, transparent), transparent 34rem),
+    linear-gradient(135deg, #0b1018 0%, #151b25 100%);
+  --page-background: #0f141d;
+  --sidebar-panel-background: rgba(17, 24, 39, 0.9);
+  --main-panel-background: rgba(12, 18, 29, 0.94);
+  --surface-background: rgba(31, 41, 55, 0.7);
+  --soft-background: rgba(25, 34, 48, 0.76);
+  --hover-background: rgba(51, 65, 85, 0.62);
+  --active-background: rgba(59, 130, 246, 0.18);
+  --text-primary: #ffffff;
+  --text-secondary: #f1f5f9;
+  --text-muted: #dbe3ef;
+  --foreground: #ffffff;
+  --muted-foreground: #dbe3ef;
+  --muted: rgba(51, 65, 85, 0.72);
+  --border: rgba(226, 232, 240, 0.11);
+  --divider: rgba(226, 232, 240, 0.11);
+  --strong-divider: rgba(138, 180, 255, 0.34);
+  --received-message-background: rgba(30, 41, 59, 0.82);
+  --sent-message-background: rgba(37, 99, 235, 0.28);
+  --avatar-background: #1e293b;
+  --send-button-background: #8ab4ff;
+  --send-button-text: #0b1018;
+  --danger-text: #fb7185;
+  --glass-shadow: 0 20px 50px rgba(0, 0, 0, 0.34);
+}
+
+html[data-theme="blue"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.16), transparent 34rem),
+    linear-gradient(135deg, #edf7ff 0%, #dbeafe 100%);
+  --page-background: #eaf4ff;
+  --sidebar-panel-background: rgba(246, 251, 255, 0.88);
+  --main-panel-background: rgba(226, 240, 255, 0.94);
+  --sent-message-background: #bfdbfe;
+  --avatar-background: #dbeafe;
+  --send-button-background: #2563eb;
+  --text-primary: #172554;
+  --text-secondary: #315a91;
+}
+
+html[data-theme="pink"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(217, 70, 131, 0.16), transparent 34rem),
+    linear-gradient(135deg, #fff1f6 0%, #fce7f3 100%);
+  --page-background: #fdf2f8;
+  --sidebar-panel-background: rgba(255, 248, 252, 0.88);
+  --main-panel-background: rgba(252, 231, 243, 0.92);
+  --sent-message-background: #fbcfe8;
+  --avatar-background: #fce7f3;
+  --send-button-background: #d94683;
+  --text-primary: #64133f;
+  --text-secondary: #8a3d63;
+}
+
+html[data-theme="lavender"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.15), transparent 34rem),
+    linear-gradient(135deg, #f7f2ff 0%, #ede9fe 100%);
+  --page-background: #f5f3ff;
+  --sidebar-panel-background: rgba(251, 249, 255, 0.88);
+  --main-panel-background: rgba(237, 233, 254, 0.92);
+  --sent-message-background: #ddd6fe;
+  --avatar-background: #ede9fe;
+  --send-button-background: #7c3aed;
+  --text-primary: #3b176e;
+  --text-secondary: #654198;
+}
+
+html[data-theme="mint"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(5, 150, 105, 0.14), transparent 34rem),
+    linear-gradient(135deg, #edfbf6 0%, #d1fae5 100%);
+  --page-background: #ecfdf5;
+  --sidebar-panel-background: rgba(248, 255, 252, 0.88);
+  --main-panel-background: rgba(209, 250, 229, 0.9);
+  --sent-message-background: #a7f3d0;
+  --avatar-background: #d1fae5;
+  --send-button-background: #059669;
+  --text-primary: #064e3b;
+  --text-secondary: #27715a;
+}
+
+html[data-theme="sunset"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(234, 88, 12, 0.14), transparent 34rem),
+    linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  --page-background: #fff7ed;
+  --sidebar-panel-background: rgba(255, 251, 245, 0.88);
+  --main-panel-background: rgba(255, 237, 213, 0.9);
+  --sent-message-background: #fed7aa;
+  --avatar-background: #ffedd5;
+  --send-button-background: #ea580c;
+  --text-primary: #6b2f09;
+  --text-secondary: #93572d;
+}
+
+html[data-theme="aurora"] {
+  --app-gradient:
+    radial-gradient(circle at top left, rgba(8, 145, 178, 0.15), transparent 34rem),
+    linear-gradient(135deg, #ecfeff 0%, #dcfce7 100%);
+  --page-background: #f0fdfa;
+  --sidebar-panel-background: rgba(248, 255, 253, 0.88);
+  --main-panel-background: rgba(207, 250, 254, 0.82);
+  --sent-message-background: #bbf7d0;
+  --avatar-background: #ccfbf1;
+  --send-button-background: #0891b2;
+  --text-primary: #164e63;
+  --text-secondary: #276f7c;
+}
+
+body {
+  font-family: "Geist Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.sidebar,
+.main-body,
+.main-view,
+.workspace-header,
+.workspace-content {
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.brand-icon,
+.empty-main-icon,
+.header-icon-button,
+.footer-tab,
+.profile-menu-button,
+.main-icon-button,
+.composer-icon-button,
+.main-close-button,
+.contacts-back-icon-button,
+.contacts-search-icon-button {
+  border-radius: 8px;
+}
+
+.brand-icon {
+  border-color: var(--icon-ring);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--send-button-background) 22%, transparent);
+}
+
+.header-icon-button,
+.main-icon-button,
+.composer-icon-button,
+.main-close-button,
+.contacts-back-icon-button,
+.contacts-search-icon-button {
+  background-color: color-mix(in srgb, var(--surface-background) 72%, transparent);
+  color: var(--text-primary);
+}
+
+.header-icon-button:hover,
+.footer-tab:hover,
+.profile-menu-button:hover,
+.main-icon-button:hover,
+.composer-icon-button:hover,
+.main-close-button:hover,
+.contacts-back-icon-button:hover,
+.contacts-search-icon-button:hover {
+  background-color: var(--hover-background);
+  box-shadow: inset 0 0 0 1px var(--divider);
+}
+
+.header-icon-button.active,
+.header-icon-button.active:hover,
+.footer-tab.active,
+.footer-tab.active:hover,
+.profile-menu-button.active,
+.profile-menu-button.active:hover {
+  color: var(--send-button-background);
+}
+
+.header-icon-button.active::after,
+.footer-tab.active::after,
+.profile-menu-button.active::after,
+.workspace-tab.active::after,
+.settings-tab.active::after,
+.profile-settings-tab.active::after {
+  background-color: var(--send-button-background);
+  border-radius: 999px;
+}
+
+.header-icon-button svg,
+.footer-tab svg,
+.profile-menu-button svg,
+.search-bar svg,
+.main-icon-button svg,
+.composer-icon-button svg,
+.main-close-button svg,
+.contacts-back-icon-button svg,
+.contacts-search-icon-button svg {
+  stroke-width: 2;
+}
+
+.empty-main-content {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.empty-main-icon {
+  display: grid;
+  width: 84px;
+  height: 84px;
+  margin: 0 0 8px;
+  place-items: center;
+  border: 1px solid var(--icon-ring);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.62), transparent 34px),
+    linear-gradient(135deg, var(--icon-surface), color-mix(in srgb, var(--send-button-background) 20%, var(--surface-background)));
+  color: var(--send-button-background);
+  box-shadow: var(--glass-shadow);
+}
+
+.empty-main-icon svg {
+  width: 38px;
+  height: 38px;
+  stroke-width: 1.9;
+}
+
+.empty-main-content h2 {
+  margin-bottom: 0;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.empty-main-content p {
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.appearance-theme-option {
+  min-height: 122px;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.appearance-theme-option:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--glass-shadow);
+}
+
+.appearance-theme-option.active {
+  border-color: var(--strong-divider);
+  box-shadow: inset 0 0 0 1px var(--strong-divider), var(--glass-shadow);
+}
+
+.appearance-theme-option.active::before {
+  background-color: var(--send-button-background);
+  border-radius: 999px;
+}
+
+.appearance-theme-check {
+  position: absolute;
+  right: 12px;
+  bottom: 13px;
+  width: 18px;
+  height: 18px;
+  color: var(--send-button-background);
+  stroke-width: 2.4;
+}
+
+.appearance-swatch-row {
+  border-color: var(--divider);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+#emptyMainView {
+  align-items: center;
+  justify-content: center;
+}
+
+#emptyMainView .empty-main-content {
+  display: grid;
+  max-width: min(420px, 100%);
+  justify-items: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+#emptyMainView .empty-main-content h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+#emptyMainView .empty-main-content p {
+  max-width: 300px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* ==================================================
+   CONFIRM ACTION MODAL
+================================================== */
+
+.confirm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background-color: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.confirm-modal {
+  position: relative;
+  display: grid;
+  width: min(420px, 100%);
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--surface-background) 92%, var(--main-panel-background));
+  color: var(--text-primary);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+}
+
+.confirm-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background-color: transparent;
+  color: var(--text-secondary);
+}
+
+.confirm-modal-close:hover {
+  background-color: var(--hover-background);
+  color: var(--text-primary);
+}
+
+.confirm-modal-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.confirm-modal-close svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+
+.confirm-modal-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--send-button-background) 14%, transparent);
+  color: var(--send-button-background);
+}
+
+.confirm-modal--danger .confirm-modal-icon {
+  background-color: color-mix(in srgb, var(--danger-text) 14%, transparent);
+  color: var(--danger-text);
+}
+
+.confirm-modal-icon svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2;
+}
+
+.confirm-modal-copy {
+  display: grid;
+  gap: 8px;
+  padding-right: 26px;
+}
+
+.confirm-modal-copy h2 {
+  color: var(--text-primary);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.confirm-modal-copy p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-modal-actions .secondary-action-button,
+.confirm-modal-actions .danger-action-button {
+  min-height: 40px;
+}
+
+@media (max-width: 520px) {
+  .confirm-modal {
+    padding: 22px;
+  }
+
+  .confirm-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-modal-actions .secondary-action-button,
+  .confirm-modal-actions .danger-action-button {
     width: 100%;
   }
 }

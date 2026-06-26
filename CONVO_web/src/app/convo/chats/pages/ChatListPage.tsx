@@ -1,3 +1,5 @@
+import { Search } from "lucide-react"
+
 import type { ChatSummary } from "@/app/convo/chats/chats.api"
 
 interface ChatListPageProps {
@@ -26,10 +28,7 @@ function ChatListPage({ chats, selectedChatId, onOpenChat }: ChatListPageProps) 
       </div>
 
       <label className="search-bar" htmlFor="chatSearch">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M16 16L21 21" />
-        </svg>
+        <Search aria-hidden="true" />
         <input id="chatSearch" type="search" placeholder="Search chats" />
       </label>
 

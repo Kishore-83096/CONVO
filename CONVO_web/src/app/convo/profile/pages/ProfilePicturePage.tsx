@@ -5,6 +5,7 @@ import {
   uploadProfilePicture,
 } from "@/app/convo/profile/profile.api"
 import type { CompleteProfile } from "@/app/convo/profile/profile.types"
+import ConfirmActionModal from "@/app/convo/layout/components/ConfirmActionModal"
 import ImageCropper from "@/app/convo/shared/components/ImageCropper"
 
 interface ProfilePicturePageProps {
@@ -39,6 +40,7 @@ function ProfilePicturePage({
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [croppedFile, setCroppedFile] = useState<File | null>(null)
   const picture = profile.profile_picture
@@ -88,6 +90,7 @@ function ProfilePicturePage({
       )
     } finally {
       setIsSubmitting(false)
+      setIsDeleteConfirmOpen(false)
     }
   }
 
@@ -173,7 +176,7 @@ function ProfilePicturePage({
               className="secondary-action-button"
               type="button"
               disabled={isSubmitting}
-              onClick={() => void handleDelete()}
+              onClick={() => setIsDeleteConfirmOpen(true)}
             >
               Delete Picture
             </button>
@@ -198,6 +201,17 @@ function ProfilePicturePage({
           {error}
         </p>
       ) : null}
+
+      <ConfirmActionModal
+        confirmLabel="Delete picture"
+        description="This will remove your current profile picture from CONVO. You can upload a new one later."
+        isBusy={isSubmitting}
+        isOpen={isDeleteConfirmOpen}
+        title="Delete profile picture?"
+        tone="danger"
+        onCancel={() => setIsDeleteConfirmOpen(false)}
+        onConfirm={() => void handleDelete()}
+      />
     </section>
   )
 }

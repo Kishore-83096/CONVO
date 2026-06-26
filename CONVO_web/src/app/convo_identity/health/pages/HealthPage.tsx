@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ApiClientError, apiRequest } from "@/api/client"
+import SeoMeta from "@/app/seo/SeoMeta"
 import parrotIcon from "@/assets/icons/ParrotIcon_3D_effect.svg"
 import { env } from "@/config/env"
 
@@ -74,7 +75,7 @@ function HealthPage() {
       setErrorMessage(
         error instanceof ApiClientError || error instanceof Error
           ? error.message
-          : "Unable to check the Parrot Identity service.",
+          : "Unable to check the CONVO Identity service.",
       )
     }
   }, [])
@@ -92,16 +93,22 @@ function HealthPage() {
 
   return (
     <main className="app-shell">
+      <SeoMeta
+        canonicalPath="/health/all"
+        description="CONVO private health check page."
+        robots="noindex, nofollow"
+        title="CONVO Health Check"
+      />
       <section className="status-page" aria-labelledby="page-title">
         <div className="brand-mark" aria-hidden="true">
           <img src={parrotIcon} alt="" />
         </div>
 
         <div className="intro">
-          <p className="eyebrow">Parrot Ecommunications</p>
+          <p className="eyebrow">CONVO</p>
           <h1 id="page-title">Identity service status</h1>
           <p>
-            Live connectivity check between this frontend and the Parrot
+            Live connectivity check between this frontend and the CONVO
             Identity API.
           </p>
         </div>
@@ -130,10 +137,10 @@ function HealthPage() {
               </p>
               <h2>
                 {requestStatus === "loading"
-                  ? "Contacting Parrot Identity…"
+                  ? "Contacting CONVO Identity..."
                   : isConnected
-                    ? "Parrot Identity is available"
-                    : "Parrot Identity is unavailable"}
+                    ? "CONVO Identity is available"
+                    : "CONVO Identity is unavailable"}
               </h2>
               <p>
                 {requestStatus === "loading"

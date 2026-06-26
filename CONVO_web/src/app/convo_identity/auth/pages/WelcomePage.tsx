@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react"
+import { Eye, EyeOff } from "lucide-react"
 import { useNavigate } from "react-router"
 
 import { ApiClientError } from "@/api/client"
+import SeoMeta from "@/app/seo/SeoMeta"
 import { login, registerAccount } from "@/app/convo_identity/auth/auth.api"
 import { userHomePath } from "@/app/convo_identity/auth/auth-routes"
 import {
@@ -27,7 +29,7 @@ import {
 
 import "../css/WelcomePage.css"
 
-type AuthTab = "features" | "register" | "login"
+type AuthTab = "register" | "login"
 
 interface Notice {
   type: "success" | "error"
@@ -41,6 +43,12 @@ const loginPlaceholders: Record<LoginMethod, string> = {
   email: "you@convo.app",
   contact_number: "10-digit contact number",
 }
+
+const loginMethods: { id: LoginMethod; label: string }[] = [
+  { id: "username", label: "Username" },
+  { id: "email", label: "Email" },
+  { id: "contact_number", label: "Contact" },
+]
 
 function fieldErrors(errors: unknown): string[] {
   if (!errors || typeof errors !== "object") {
@@ -73,13 +81,27 @@ function apiErrorNotice(error: unknown): Notice {
   }
 }
 
-function WelcomePage() {
+interface WelcomePageProps {
+  initialTab?: AuthTab
+}
+
+function WelcomePage({ initialTab = "login" }: WelcomePageProps) {
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<AuthTab>("features")
+  const [activeTab, setActiveTab] = useState<AuthTab>(initialTab)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [loginMethod, setLoginMethod] = useState<LoginMethod>("username")
   const [loginIdentifier, setLoginIdentifier] = useState("")
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    register: false,
+    confirm: false,
+    login: false,
+  })
   const [notice, setNotice] = useState<Notice | null>(null)
+
+  useEffect(() => {
+    setActiveTab(initialTab)
+    setNotice(null)
+  }, [initialTab])
 
   useEffect(() => {
     const session = getAuthSession()
@@ -113,6 +135,7 @@ function WelcomePage() {
       setLoginMethod("username")
       setLoginIdentifier(response.data.username)
       setActiveTab("login")
+      navigate("/login")
       setNotice({
         type: "success",
         title: "Account created",
@@ -157,8 +180,18 @@ function WelcomePage() {
   }
 
   const changeTab = (value: string) => {
-    setActiveTab(value as AuthTab)
+    const nextTab = value as AuthTab
+
+    setActiveTab(nextTab)
     setNotice(null)
+    navigate(nextTab === "login" ? "/login" : "/register")
+  }
+
+  const togglePassword = (field: keyof typeof visiblePasswords) => {
+    setVisiblePasswords((current) => ({
+      ...current,
+      [field]: !current[field],
+    }))
   }
 
   return (
@@ -167,67 +200,40 @@ function WelcomePage() {
       value={activeTab}
       onValueChange={changeTab}
     >
+      <SeoMeta
+        canonicalPath={initialTab === "register" ? "/register" : "/login"}
+        description="Sign in to CONVO or create an account to access private messaging, contacts, profile, and account tools."
+        robots="noindex, nofollow"
+        title={initialTab === "register" ? "Create a CONVO Account" : "Sign in to CONVO"}
+      />
       <div className="welcome-page">
         <header className="welcome-header">
           <div className="welcome-container welcome-header-content">
             <button
               className="welcome-brand"
               type="button"
-              onClick={() => changeTab("features")}
+              onClick={() => navigate("/")}
               aria-label="Show CONVO features"
             >
-              <img className="welcome-logo" src={convoLogo} alt="" />
+              <img
+                className="welcome-logo"
+                src={convoLogo}
+                alt="CONVO logo"
+                width="42"
+                height="42"
+              />
               <span>CONVO</span>
             </button>
 
             <TabsList className="auth-tabs-list" variant="line">
-              <TabsTrigger value="register">Join us</TabsTrigger>
-              <TabsTrigger value="login">Login</TabsTrigger>
+              <TabsTrigger value="login">Sign in</TabsTrigger>
+              <TabsTrigger value="register">Create account</TabsTrigger>
             </TabsList>
           </div>
         </header>
 
         <main className="welcome-container welcome-main">
-          <TabsContent className="features-view" value="features">
-            <section className="welcome-intro">
-              <p className="welcome-eyebrow">Welcome to CONVO</p>
-              <h1 className="welcome-title">
-                One quiet place for your conversations.
-              </h1>
-              <p className="welcome-description">
-                Create your identity, shape your profile, and keep the people
-                important to you close inside one clean workspace.
-              </p>
-            </section>
-
-            <section className="features-grid" aria-label="CONVO features">
-              <article>
-                <span>01</span>
-                <h2>Your identity</h2>
-                <p>
-                  Get your CONVO identity and contact number when you create
-                  an account.
-                </p>
-              </article>
-              <article>
-                <span>02</span>
-                <h2>Your profile</h2>
-                <p>
-                  Keep your bio, picture, address, and important events in one
-                  profile.
-                </p>
-              </article>
-              <article>
-                <span>03</span>
-                <h2>Your contacts</h2>
-                <p>
-                  Find CONVO users and manage the people you want to stay
-                  connected with.
-                </p>
-              </article>
-            </section>
-          </TabsContent>
-
+          <section className="auth-shell" aria-label="CONVO authentication">
             {notice && (
               <Alert
                 className="auth-notice"
@@ -243,12 +249,12 @@ function WelcomePage() {
               </Alert>
             )}
 
-          <TabsContent className="auth-view" value="register">
-            <section className="auth-panel">
+            <TabsContent className="auth-view" value="register">
+              <section className="auth-panel">
               <button
                 className="auth-close"
                 type="button"
-                onClick={() => changeTab("features")}
+                onClick={() => navigate("/")}
                 aria-label="Close registration"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -293,26 +299,60 @@ function WelcomePage() {
                 <div className="auth-password-grid">
                   <div className="auth-field">
                     <Label htmlFor="register_password">Password</Label>
-                    <Input
-                      id="register_password"
-                      name="password"
-                      type="password"
-                      autoComplete="new-password"
-                      minLength={8}
-                      maxLength={128}
-                      required
-                    />
+                    <span className="auth-password-control">
+                      <Input
+                        id="register_password"
+                        name="password"
+                        type={visiblePasswords.register ? "text" : "password"}
+                        autoComplete="new-password"
+                        minLength={8}
+                        maxLength={128}
+                        required
+                      />
+                      <button
+                        type="button"
+                        aria-label={
+                          visiblePasswords.register
+                            ? "Hide password"
+                            : "Show password"
+                        }
+                        onClick={() => togglePassword("register")}
+                      >
+                        {visiblePasswords.register ? (
+                          <EyeOff aria-hidden="true" />
+                        ) : (
+                          <Eye aria-hidden="true" />
+                        )}
+                      </button>
+                    </span>
                   </div>
                   <div className="auth-field">
                     <Label htmlFor="confirm_password">Confirm password</Label>
-                    <Input
-                      id="confirm_password"
-                      name="confirm_password"
-                      type="password"
-                      autoComplete="new-password"
-                      maxLength={128}
-                      required
-                    />
+                    <span className="auth-password-control">
+                      <Input
+                        id="confirm_password"
+                        name="confirm_password"
+                        type={visiblePasswords.confirm ? "text" : "password"}
+                        autoComplete="new-password"
+                        maxLength={128}
+                        required
+                      />
+                      <button
+                        type="button"
+                        aria-label={
+                          visiblePasswords.confirm
+                            ? "Hide confirm password"
+                            : "Show confirm password"
+                        }
+                        onClick={() => togglePassword("confirm")}
+                      >
+                        {visiblePasswords.confirm ? (
+                          <EyeOff aria-hidden="true" />
+                        ) : (
+                          <Eye aria-hidden="true" />
+                        )}
+                      </button>
+                    </span>
                   </div>
                 </div>
 
@@ -323,18 +363,18 @@ function WelcomePage() {
               <p className="auth-switch">
                 Already have an account?{" "}
                 <button type="button" onClick={() => changeTab("login")}>
-                  Login
+                  Sign in
                 </button>
               </p>
-            </section>
-          </TabsContent>
+              </section>
+            </TabsContent>
 
-          <TabsContent className="auth-view" value="login">
-            <section className="auth-panel">
+            <TabsContent className="auth-view" value="login">
+              <section className="auth-panel">
               <button
                 className="auth-close"
                 type="button"
-                onClick={() => changeTab("features")}
+                onClick={() => navigate("/")}
                 aria-label="Close login"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -344,24 +384,33 @@ function WelcomePage() {
               </button>
               <div className="auth-heading">
                 <p>Welcome back</p>
-                <h1>Login to CONVO</h1>
+                <h1>Sign in to CONVO</h1>
               </div>
               <form className="auth-form" onSubmit={handleLogin}>
                 <div className="auth-field">
-                  <Label htmlFor="login_method">Login with</Label>
-                  <select
-                    id="login_method"
-                    className="auth-method-select"
-                    value={loginMethod}
-                    onChange={(event) => {
-                      setLoginMethod(event.target.value as LoginMethod)
-                      setLoginIdentifier("")
-                    }}
+                  <span className="auth-field-label" id="loginMethodLabel">
+                    Sign in with
+                  </span>
+                  <div
+                    className="auth-method-segment"
+                    aria-labelledby="loginMethodLabel"
+                    role="group"
                   >
-                    <option value="username">Username</option>
-                    <option value="email">CONVO email</option>
-                    <option value="contact_number">Contact number</option>
-                  </select>
+                    {loginMethods.map((method) => (
+                      <button
+                        className={loginMethod === method.id ? "active" : ""}
+                        key={method.id}
+                        type="button"
+                        aria-pressed={loginMethod === method.id}
+                        onClick={() => {
+                          setLoginMethod(method.id)
+                          setLoginIdentifier("")
+                        }}
+                      >
+                        {method.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="auth-field">
@@ -386,18 +435,33 @@ function WelcomePage() {
 
                 <div className="auth-field">
                   <Label htmlFor="login_password">Password</Label>
-                  <Input
-                    id="login_password"
-                    name="password"
-                    type="password"
-                    autoComplete="current-password"
-                    maxLength={128}
-                    required
-                  />
+                  <span className="auth-password-control">
+                    <Input
+                      id="login_password"
+                      name="password"
+                      type={visiblePasswords.login ? "text" : "password"}
+                      autoComplete="current-password"
+                      maxLength={128}
+                      required
+                    />
+                    <button
+                      type="button"
+                      aria-label={
+                        visiblePasswords.login ? "Hide password" : "Show password"
+                      }
+                      onClick={() => togglePassword("login")}
+                    >
+                      {visiblePasswords.login ? (
+                        <EyeOff aria-hidden="true" />
+                      ) : (
+                        <Eye aria-hidden="true" />
+                      )}
+                    </button>
+                  </span>
                 </div>
 
                 <Button className="auth-submit" disabled={isSubmitting}>
-                  {isSubmitting ? "Signing in..." : "Login"}
+                  {isSubmitting ? "Signing in..." : "Sign in"}
                 </Button>
               </form>
               <p className="auth-switch">
@@ -406,8 +470,9 @@ function WelcomePage() {
                   Create account
                 </button>
               </p>
-            </section>
-          </TabsContent>
+              </section>
+            </TabsContent>
+          </section>
         </main>
       </div>
     </Tabs>

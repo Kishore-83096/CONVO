@@ -1,0 +1,243 @@
+.public-page {
+  width: 100%;
+  min-height: 100vh;
+  overflow-x: clip;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 32rem),
+    linear-gradient(135deg, #fbfcff 0%, #eef2f7 100%);
+  color: #111827;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.public-page::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html:has(.public-page),
+body:has(.public-page) {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html:has(.public-page)::-webkit-scrollbar,
+body:has(.public-page)::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.public-header {
+  width: 100%;
+  padding: 18px clamp(16px, 3vw, 40px);
+}
+
+.public-nav,
+.public-main,
+.public-footer {
+  width: 100%;
+  margin: 0 auto;
+}
+
+.public-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.public-brand,
+.public-nav-links,
+.public-auth-links,
+.public-hero-actions,
+.public-footer nav {
+  display: flex;
+  align-items: center;
+}
+
+.public-brand {
+  flex-shrink: 0;
+  gap: 10px;
+  color: #111827;
+  font-size: 18px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.public-brand img {
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.16);
+}
+
+.public-nav-links,
+.public-auth-links,
+.public-footer nav {
+  gap: 14px;
+}
+
+.public-nav a,
+.public-footer a {
+  color: #4b5563;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.public-nav a:hover,
+.public-footer a:hover {
+  color: #111827;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.public-nav a:focus-visible,
+.public-footer a:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 4px;
+}
+
+.public-primary-link {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border-radius: 8px;
+  background-color: #2563eb;
+  color: #ffffff !important;
+  text-decoration: none !important;
+}
+
+.public-primary-link:hover {
+  background-color: #1d4ed8;
+}
+
+.public-main {
+  padding: 74px clamp(16px, 3vw, 40px) 64px;
+}
+
+.public-hero {
+  max-width: 760px;
+}
+
+.public-eyebrow {
+  margin-bottom: 12px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.public-hero h1 {
+  color: #111827;
+  font-size: clamp(36px, 7vw, 68px);
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+.public-intro {
+  max-width: 650px;
+  margin-top: 20px;
+  color: #4b5563;
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.public-hero-actions {
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.public-hero-actions a:not(.public-primary-link) {
+  color: #111827;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.public-section-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 56px;
+}
+
+.public-section-grid article {
+  min-height: 178px;
+  padding: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.08);
+}
+
+.public-section-grid h2 {
+  color: #111827;
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+.public-section-grid p {
+  margin-top: 10px;
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.public-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 28px clamp(16px, 3vw, 40px) 36px;
+  border-top: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.public-footer strong {
+  color: #111827;
+}
+
+.public-footer p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.public-error-main {
+  min-height: 58vh;
+}
+
+@media (max-width: 860px) {
+  .public-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .public-nav-links,
+  .public-auth-links,
+  .public-footer nav {
+    flex-wrap: wrap;
+  }
+
+  .public-section-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .public-main {
+    padding-top: 42px;
+  }
+
+  .public-section-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .public-footer {
+    flex-direction: column;
+  }
+}
