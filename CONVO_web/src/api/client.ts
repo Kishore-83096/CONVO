@@ -35,6 +35,13 @@ export async function apiRequest<T>(
   options: RequestInit = {},
   accessToken?: string,
 ): Promise<ApiSuccess<T>> {
+  if (!env.identityApiBaseUrl) {
+    throw new ApiClientError(
+      "The CONVO Identity API URL is not configured for this deployment.",
+      0,
+    )
+  }
+
   const headers = new Headers(options.headers)
   const isFormData = options.body instanceof FormData
 
