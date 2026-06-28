@@ -223,6 +223,7 @@ def send_direct_message_with_recovery(
     recovery_envelopes: list[dict] | None = None,
     reply_to_id: UUID | None = None,
     client_sent_at=None,
+    attachment_ids: list | None = None,
 ) -> RecoveryAwareDirectMessageResult:
     """
     Store the direct message, normal device envelopes, and optional
@@ -276,6 +277,7 @@ def send_direct_message_with_recovery(
         envelopes=envelopes,
         reply_to_id=reply_to_id,
         client_sent_at=client_sent_at,
+        attachment_ids=attachment_ids,
     )
 
     if base_result.message_created:

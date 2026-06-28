@@ -71,10 +71,37 @@ class ContactDeliveryPolicySyncView(APIView):
                 "success": True,
                 "message": "Contact delivery policy synced.",
                 "data": {
+                    "policy_id": str(result.policy.id),
+
                     "owner_user_id": result.policy.owner_user_id,
                     "target_user_id": result.policy.target_user_id,
+
+                    "policy_owner_user_id": result.policy.owner_user_id,
+                    "restricted_user_id": result.policy.target_user_id,
+
                     "is_blocked": result.policy.is_blocked,
+                    "ghost_until": (
+                        result.policy.ghost_until.isoformat()
+                        if result.policy.ghost_until
+                        else None
+                    ),
+                    "ghost_permanent": result.policy.ghost_permanent,
+                    "ghost_duration_option": (
+                        result.policy.ghost_duration_option
+                    ),
+
                     "policy_version": result.policy.policy_version,
+                    "source_updated_at": (
+                        result.policy.source_updated_at.isoformat()
+                        if result.policy.source_updated_at
+                        else None
+                    ),
+                    "synced_at": (
+                        result.policy.synced_at.isoformat()
+                        if result.policy.synced_at
+                        else None
+                    ),
+
                     "created": result.created,
                     "updated": result.updated,
                     "ignored_stale_update": (

@@ -2,7 +2,10 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from apps.realtime.publishers import (
+    schedule_message_delivered_receipts_publish,
+    schedule_message_read_receipts_publish,
+)
 from .receipt_serializers import (
     DeliveredReceiptRequestSerializer,
     MessageReceiptSummarySerializer,
@@ -81,7 +84,11 @@ class DeliveredReceiptView(APIView):
                 error,
                 status.HTTP_409_CONFLICT,
             )
-
+        
+        if result.updated_count > 0:
+            schedule_message_delivered_receipts_publish(
+                receipt_ids=result.changed_receipt_ids,
+            )
         return Response(
             {
                 "success": True,
@@ -137,7 +144,12 @@ class ReadReceiptView(APIView):
                 error,
                 status.HTTP_409_CONFLICT,
             )
+        
 
+        if result.updated_count > 0:
+            schedule_message_read_receipts_publish(
+                receipt_ids=result.changed_receipt_ids,
+            )
         return Response(
             {
                 "success": True,

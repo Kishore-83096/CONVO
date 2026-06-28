@@ -14,7 +14,9 @@ from .group_services import (
     GroupMessageValidationError,
     send_encrypted_group_message,
 )
-
+from apps.realtime.publishers import (
+    schedule_group_message_stored_publish,
+)
 
 def _validation_error_response(errors):
     return Response(
@@ -68,6 +70,7 @@ class GroupMessageSendView(APIView):
                 reply_to_message_id=data.get("reply_to_message_id"),
                 client_sent_at=data.get("client_sent_at"),
                 recovery_envelopes=data.get("recovery_envelopes", []),
+                attachment_ids=data.get("attachment_ids", []),
             )
         except GroupMessageValidationError as error:
             return _service_error_response(
@@ -88,6 +91,12 @@ class GroupMessageSendView(APIView):
             return _service_error_response(
                 error,
                 status.HTTP_409_CONFLICT,
+            )
+        
+        if result.message_created:
+            schedule_group_message_stored_publish(
+                message_id=result.encryption.message_id,
+                sender_device_id=data["sender_device_id"],
             )
 
         return Response(

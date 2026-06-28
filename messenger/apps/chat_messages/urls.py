@@ -13,6 +13,7 @@ from .recovery_backfill_views import (
     RecoveryBackfillView,
 )
 from .attachment_views import (
+    CloudinarySignedUploadView,
     EncryptedAttachmentCompleteView,
     EncryptedAttachmentDeleteView,
     EncryptedAttachmentDownloadView,
@@ -95,6 +96,11 @@ urlpatterns = [
         "<uuid:message_id>/receipts/",
         MessageReceiptSummaryView.as_view(),
         name="message-receipts-summary",
+    ),
+    path(
+        "attachments/cloudinary/sign-upload/",
+        CloudinarySignedUploadView.as_view(),
+        name="encrypted-attachment-cloudinary-sign-upload",
     ),
     path(
         "attachments/initiate/",

@@ -436,49 +436,52 @@ class DirectMessageRecoveryAPITests(APITestCase):
             2,
         )
 
-def test_existing_room_send_by_room_id_stores_recovery_envelopes(self):
-    self.authenticate_as("1")
+    def test_existing_room_send_by_room_id_stores_recovery_envelopes(self):
+        self.create_recovery_bundle(user_id="1")
+        self.create_recovery_bundle(user_id="2")
+        self.authenticate_as("1")
 
-    first_response = self.client.post(
-        self.url,
-        self.valid_payload(),
-        format="json",
-    )
+        first_response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
 
-    self.assertEqual(
-        first_response.status_code,
-        status.HTTP_201_CREATED,
-    )
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_201_CREATED,
+        )
 
-    room_id = first_response.json()["data"]["room_id"]
+        room_id = first_response.json()["data"]["room_id"]
 
-    second_payload = self.valid_payload(
-        client_message_id=uuid.UUID(
-            "99999999-9999-4999-8999-999999999999"
-        ),
-        encrypted_payload="SECOND_RECOVERY_CIPHERTEXT",
-    )
+        second_payload = self.valid_payload()
+        second_payload["client_message_id"] = str(
+            uuid.UUID("99999999-9999-4999-8999-999999999999")
+        )
+        second_payload["encrypted_payload"] = (
+            "SECOND_RECOVERY_CIPHERTEXT"
+        )
 
-    second_payload.pop("recipient_contact_id")
-    second_payload["room_id"] = room_id
-    second_payload["encryption_metadata"]["nonce"] = (
-        "SECOND_RECOVERY_NONCE"
-    )
+        second_payload.pop("recipient_contact_id")
+        second_payload["room_id"] = room_id
+        second_payload["encryption_metadata"]["nonce"] = (
+            "SECOND_RECOVERY_NONCE"
+        )
 
-    second_payload["envelopes"][0][
-        "session_reference"
-    ] = "second-sender-sync-session"
-    second_payload["envelopes"][1][
-        "session_reference"
-    ] = "second-recipient-ratchet-session"
+        second_payload["envelopes"][0][
+            "session_reference"
+        ] = "second-sender-sync-session"
+        second_payload["envelopes"][1][
+            "session_reference"
+        ] = "second-recipient-ratchet-session"
 
-    second_response = self.client.post(
-        self.url,
-        second_payload,
-        format="json",
-    )
+        second_response = self.client.post(
+            self.url,
+            second_payload,
+            format="json",
+        )
 
-    self.assertEqual(
-        second_response.status_code,
-        status.HTTP_201_CREATED,
-    )
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_201_CREATED,
+        )

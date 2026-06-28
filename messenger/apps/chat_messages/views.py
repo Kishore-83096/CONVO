@@ -3,7 +3,9 @@ from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from apps.realtime.publishers import (
+    schedule_direct_message_stored_publish,
+)
 from apps.rooms.models import Room, RoomMember
 from messenger_config.identity_client import (
     IdentityClientError,
@@ -207,7 +209,15 @@ class SendDirectMessageView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
+        
+        if (
+            result.message_created
+            and not result.recipient_delivery_blocked
+        ):
+            schedule_direct_message_stored_publish(
+                message_id=result.message.id,
+                recipient_user_id=recipient_user_id,
+            )
         response_status = (
             status.HTTP_201_CREATED
             if result.message_created

@@ -42,13 +42,4 @@ HEALTHCHECK --interval=30s \
 
 ENTRYPOINT ["python", "docker_entrypoint.py"]
 
-CMD ["sh", "-c", "exec gunicorn \
-    --bind 0.0.0.0:${PORT:-8000} \
-    --worker-class gthread \
-    --workers ${WEB_CONCURRENCY:-1} \
-    --threads ${GUNICORN_THREADS:-4} \
-    --timeout ${GUNICORN_TIMEOUT:-60} \
-    --graceful-timeout 30 \
-    --access-logfile - \
-    --error-logfile - \
-    messenger_config.wsgi:application"]
+CMD ["sh", "-c", "exec daphne -b 0.0.0.0 -p ${PORT:-8000} messenger_config.asgi:application"]

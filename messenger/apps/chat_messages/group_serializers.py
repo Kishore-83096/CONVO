@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+MAX_ATTACHMENTS_PER_MESSAGE = 10
 
 FORBIDDEN_SECRET_FIELD_FRAGMENTS = (
     "plaintext",
@@ -107,6 +108,13 @@ class GroupMessageSendSerializer(serializers.Serializer):
         many=True,
         required=False,
         default=list,
+    )
+    
+    attachment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        default=list,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
     )
 
     def validate(self, attrs):

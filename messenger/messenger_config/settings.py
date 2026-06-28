@@ -135,6 +135,30 @@ CONTACT_POLICY_SYNC_SECRET = env(
 ).strip()
 
 # =============================================================================
+# Realtime / Redis configuration
+# =============================================================================
+
+REDIS_URL = env(
+    "REDIS_URL",
+    default="redis://127.0.0.1:6379/0",
+).strip()
+
+REALTIME_TICKET_TTL_SECONDS = env.int(
+    "REALTIME_TICKET_TTL_SECONDS",
+    default=60,
+)
+
+REALTIME_PRESENCE_TTL_SECONDS = env.int(
+    "REALTIME_PRESENCE_TTL_SECONDS",
+    default=45,
+)
+
+REALTIME_HEARTBEAT_SECONDS = env.int(
+    "REALTIME_HEARTBEAT_SECONDS",
+    default=20,
+)
+
+# =============================================================================
 # File storage
 # =============================================================================
 
@@ -150,6 +174,126 @@ CLOUDINARY_FOLDER = env(
 
 if not CLOUDINARY_FOLDER:
     raise ImproperlyConfigured("CLOUDINARY_FOLDER must not be empty.")
+
+
+# =============================================================================
+# Secure encrypted attachment upload settings
+# =============================================================================
+
+ATTACHMENT_UPLOAD_SIGNATURE_TTL_SECONDS = env.int(
+    "ATTACHMENT_UPLOAD_SIGNATURE_TTL_SECONDS",
+    default=900,
+)
+
+ATTACHMENT_UPLOAD_MAX_TTL_SECONDS = env.int(
+    "ATTACHMENT_UPLOAD_MAX_TTL_SECONDS",
+    default=900,
+)
+
+ATTACHMENT_MIN_TTL_SECONDS = env.int(
+    "ATTACHMENT_MIN_TTL_SECONDS",
+    default=60,
+)
+
+ATTACHMENT_MAX_CIPHERTEXT_BYTES = env.int(
+    "ATTACHMENT_MAX_CIPHERTEXT_BYTES",
+    default=50 * 1024 * 1024,
+)
+
+ATTACHMENT_CLOUDINARY_RESOURCE_TYPE = env(
+    "ATTACHMENT_CLOUDINARY_RESOURCE_TYPE",
+    default="raw",
+).strip()
+
+ATTACHMENT_VERIFY_CLOUDINARY_ON_COMPLETE = env.bool(
+    "ATTACHMENT_VERIFY_CLOUDINARY_ON_COMPLETE",
+    default=False,
+)
+
+ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS = env.int(
+    "ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS",
+    default=300,
+)
+
+ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS = env.int(
+    "ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS",
+    default=900,
+)
+
+if ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS must be greater than 0."
+    )
+
+if ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS > 900:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS must not exceed 900 seconds."
+    )
+
+if ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS > ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS must not exceed "
+        "ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS."
+    )
+
+
+ATTACHMENT_CLEANUP_DELETE_CLOUDINARY = env.bool(
+    "ATTACHMENT_CLEANUP_DELETE_CLOUDINARY",
+    default=False,
+)
+
+ATTACHMENT_UNATTACHED_GRACE_HOURS = env.int(
+    "ATTACHMENT_UNATTACHED_GRACE_HOURS",
+    default=24,
+)
+
+if ATTACHMENT_UNATTACHED_GRACE_HOURS < 1:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_UNATTACHED_GRACE_HOURS must be at least 1 hour."
+    )
+
+
+
+
+
+if ATTACHMENT_CLOUDINARY_RESOURCE_TYPE != "raw":
+    raise ImproperlyConfigured(
+        "ATTACHMENT_CLOUDINARY_RESOURCE_TYPE must be 'raw'. "
+        "Encrypted attachment bytes must not be uploaded as image/video/audio."
+    )
+
+if ATTACHMENT_MIN_TTL_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_MIN_TTL_SECONDS must be at least 1 second."
+    )
+
+if ATTACHMENT_UPLOAD_MAX_TTL_SECONDS > 900:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_UPLOAD_MAX_TTL_SECONDS must not exceed 900 seconds."
+    )
+
+if ATTACHMENT_UPLOAD_SIGNATURE_TTL_SECONDS > ATTACHMENT_UPLOAD_MAX_TTL_SECONDS:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_UPLOAD_SIGNATURE_TTL_SECONDS must not exceed "
+        "ATTACHMENT_UPLOAD_MAX_TTL_SECONDS."
+    )
+
+if ATTACHMENT_MIN_TTL_SECONDS > ATTACHMENT_UPLOAD_MAX_TTL_SECONDS:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_MIN_TTL_SECONDS must not exceed "
+        "ATTACHMENT_UPLOAD_MAX_TTL_SECONDS."
+    )
+
+if ATTACHMENT_MAX_CIPHERTEXT_BYTES < 1:
+    raise ImproperlyConfigured(
+        "ATTACHMENT_MAX_CIPHERTEXT_BYTES must be greater than 0."
+    )
+
+if APP_ENV == "production" and not CLOUDINARY_URL:
+    raise ImproperlyConfigured(
+        "CLOUDINARY_URL is required in production for secure attachment uploads."
+    )
+
 
 if CLOUDINARY_URL:
     parsed_cloudinary_url = urlparse(CLOUDINARY_URL)
@@ -225,6 +369,9 @@ JWT_LEEWAY_SECONDS = env.int(
 # =============================================================================
 
 INSTALLED_APPS = [
+    # ASGI server integration
+    "daphne",
+
     # Django applications
     "django.contrib.admin",
     "django.contrib.auth",
@@ -234,15 +381,17 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
 
     # Third-party applications
+    "channels",
     "rest_framework",
 
-    # Messenger applications
+        # Messenger applications
     "apps.rooms.apps.RoomsConfig",
     "apps.chat_messages.apps.ChatMessagesConfig",
     "apps.e2ee_devices.apps.E2EEDevicesConfig",
     "apps.group_chat.apps.GroupChatConfig",
-]
+    "apps.realtime.apps.RealtimeConfig",
 
+]
 
 # =============================================================================
 # Middleware
@@ -267,9 +416,18 @@ MIDDLEWARE = [
 ROOT_URLCONF = "messenger_config.urls"
 
 WSGI_APPLICATION = "messenger_config.wsgi.application"
-
 ASGI_APPLICATION = "messenger_config.asgi.application"
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [
+                REDIS_URL,
+            ],
+        },
+    },
+}
 
 # =============================================================================
 # Templates

@@ -8,7 +8,7 @@ from .recovery_send_serializers import (
 MAX_ENCRYPTED_PAYLOAD_LENGTH = 2_000_000
 MAX_WRAPPED_KEY_LENGTH = 16_384
 MAX_ENVELOPES_PER_MESSAGE = 100
-
+MAX_ATTACHMENTS_PER_MESSAGE = 10
 
 class MessageKeyEnvelopeInputSerializer(serializers.Serializer):
     recipient_device_id = serializers.UUIDField()
@@ -107,6 +107,12 @@ class SendDirectMessageSerializer(serializers.Serializer):
         many=True,
         required=False,
         default=list,
+    )
+    attachment_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        default=list,
+        max_length=MAX_ATTACHMENTS_PER_MESSAGE,
     )
 
     def validate_encryption_metadata(self, value):

@@ -36,13 +36,15 @@ class ReceiptConflictError(ReceiptServiceError):
 class DeliveredReceiptResult:
     updated_count: int
     receipt_ids: list[UUID]
+    changed_receipt_ids: list[UUID]
+
 
 
 @dataclass(frozen=True, slots=True)
 class ReadReceiptResult:
     updated_count: int
     receipt_ids: list[UUID]
-
+    changed_receipt_ids: list[UUID]
 
 @dataclass(frozen=True, slots=True)
 class MessageReceiptSummary:
@@ -140,19 +142,18 @@ def _upsert_receipt(
     changed = created
 
     if delivered_at is not None:
-        if receipt.delivered_at is None or delivered_at > receipt.delivered_at:
+        if receipt.delivered_at is None:
             receipt.delivered_at = delivered_at
             changed = True
 
     if read_at is not None:
-        if receipt.read_at is None or read_at > receipt.read_at:
+        if receipt.read_at is None:
             receipt.read_at = read_at
             changed = True
 
-        if receipt.delivered_at is None or read_at > receipt.delivered_at:
+        if receipt.delivered_at is None:
             receipt.delivered_at = read_at
             changed = True
-
     if changed:
         try:
             receipt.full_clean()
@@ -226,8 +227,8 @@ def mark_messages_delivered(
 
     now = timezone.now()
     receipt_ids = []
+    changed_receipt_ids = []
     updated_count = 0
-
     for message_id in message_ids:
         message = _get_authorized_message(
             message_id=message_id,
@@ -255,10 +256,12 @@ def mark_messages_delivered(
 
         if changed:
             updated_count += 1
+            changed_receipt_ids.append(receipt.id)
 
     return DeliveredReceiptResult(
         updated_count=updated_count,
         receipt_ids=receipt_ids,
+        changed_receipt_ids=changed_receipt_ids,
     )
 
 
@@ -304,6 +307,7 @@ def mark_group_read_through(
 
     now = timezone.now()
     receipt_ids = []
+    changed_receipt_ids = []
     updated_count = 0
 
     candidate_messages = (
@@ -342,12 +346,13 @@ def mark_group_read_through(
 
         if changed:
             updated_count += 1
+            changed_receipt_ids.append(receipt.id)
 
     return ReadReceiptResult(
         updated_count=updated_count,
         receipt_ids=receipt_ids,
+        changed_receipt_ids=changed_receipt_ids,
     )
-
 
 def get_message_receipt_summary(
     *,

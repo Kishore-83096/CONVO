@@ -106,6 +106,132 @@ def recipient_has_blocked_sender(
     ).is_blocked
 
 
+
+
+def can_view_presence(
+    *,
+    viewer_user_id: Any,
+    subject_user_id: Any,
+) -> bool:
+    """
+    Directional presence visibility rule.
+
+    viewer_user_id:
+        The user who wants to see presence.
+
+    subject_user_id:
+        The user whose presence is being viewed.
+
+    Rule:
+        If subject blocked viewer, viewer cannot see subject.
+        If subject ghosted viewer and the ghost is active, viewer cannot
+        see subject.
+        Otherwise presence is visible.
+
+    Example:
+        A blocks B:
+            can_view_presence(viewer=B, subject=A) == False
+            can_view_presence(viewer=A, subject=B) == True
+            unless B also restricted A.
+
+        A ghosts B:
+            can_view_presence(viewer=B, subject=A) == False
+            until ghost expiry.
+            can_view_presence(viewer=A, subject=B) == True
+            unless B also restricted A.
+    """
+
+    viewer_id = str(viewer_user_id).strip()
+    subject_id = str(subject_user_id).strip()
+
+    if not viewer_id or not subject_id:
+        return False
+
+    if viewer_id == subject_id:
+        return True
+
+    subject_policy_against_viewer = get_delivery_policy_snapshot(
+        recipient_user_id=subject_id,
+        sender_user_id=viewer_id,
+    )
+
+    if subject_policy_against_viewer.is_blocked:
+        return False
+
+    if subject_policy_against_viewer.ghost_active:
+        return False
+
+    return True
+
+
+def can_publish_receipt_to_sender(
+    *,
+    reader_user_id: Any,
+    sender_user_id: Any,
+) -> bool:
+    """
+    Directional receipt publishing rule.
+
+    reader_user_id:
+        The user/device that delivered or read the message.
+
+    sender_user_id:
+        The original sender who would receive delivered/read status.
+
+    Rule:
+        If reader blocked sender, do not publish delivered/read.
+        If reader ghosted sender and ghost is active, do not publish
+        delivered/read.
+        Otherwise publishing receipts is allowed.
+
+    Important:
+        This controls whether the sender receives realtime receipt events.
+        It must not reveal block/ghost reason to the sender.
+    """
+
+    reader_id = str(reader_user_id).strip()
+    sender_id = str(sender_user_id).strip()
+
+    if not reader_id or not sender_id:
+        return False
+
+    if reader_id == sender_id:
+        return True
+
+    reader_policy_against_sender = get_delivery_policy_snapshot(
+        recipient_user_id=reader_id,
+        sender_user_id=sender_id,
+    )
+
+    if reader_policy_against_sender.is_blocked:
+        return False
+
+    if reader_policy_against_sender.ghost_active:
+        return False
+
+    return True
+
+
+def can_send_typing_to_viewer(
+    *,
+    viewer_user_id: Any,
+    subject_user_id: Any,
+) -> bool:
+    """
+    Typing visibility is presence-like.
+
+    If viewer cannot see subject presence, viewer must not see subject
+    typing.
+    """
+
+    return can_view_presence(
+        viewer_user_id=viewer_user_id,
+        subject_user_id=subject_user_id,
+    )
+
+
+
+
 @transaction.atomic
 def upsert_contact_delivery_policy(
     *,
@@ -173,13 +299,27 @@ def upsert_contact_delivery_policy(
         .first()
     )
 
-    if policy is not None and version < policy.policy_version:
-        return ContactPolicySyncResult(
-            policy=policy,
-            created=False,
-            updated=False,
-            ignored_stale_update=True,
-        )
+    if policy is not None:
+        if version < policy.policy_version:
+            return ContactPolicySyncResult(
+                policy=policy,
+                created=False,
+                updated=False,
+                ignored_stale_update=True,
+            )
+
+        if (
+            version == policy.policy_version
+            and source_updated_at is not None
+            and policy.source_updated_at is not None
+            and source_updated_at < policy.source_updated_at
+        ):
+            return ContactPolicySyncResult(
+                policy=policy,
+                created=False,
+                updated=False,
+                ignored_stale_update=True,
+            )
 
     created = policy is None
 

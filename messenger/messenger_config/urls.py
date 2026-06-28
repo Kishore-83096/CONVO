@@ -51,4 +51,8 @@ urlpatterns = [
         "api/v1/groups/",
         include(("apps.group_chat.urls", "group_chat"), namespace="group_chat"),
     ),
+    path(
+        "api/v1/realtime/",
+        include(("apps.realtime.urls", "realtime"), namespace="realtime"),
+    ),
 ]

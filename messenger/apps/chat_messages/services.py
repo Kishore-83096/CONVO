@@ -16,6 +16,15 @@ from .models import (
     MessageKeyEnvelope,
 )
 
+from .attachment_services import (
+    AttachmentConflictError,
+    AttachmentNotFoundError,
+    AttachmentPermissionError,
+    AttachmentValidationError,
+    validate_and_attach_message_attachments,
+    validate_idempotent_message_attachments,
+)
+
 
 from django.db.models import Prefetch, QuerySet
 
@@ -672,6 +681,7 @@ def send_direct_message(
     encryption_version: int = 1,
     reply_to_id: Any = None,
     client_sent_at: Any = None,
+    attachment_ids: list[Any] | None = None,
 ) -> DirectMessageResult:
     sender_id = str(sender_user_id).strip()
     recipient_id = str(recipient_user_id).strip()
@@ -816,6 +826,22 @@ def send_direct_message(
             envelopes=effective_existing_envelopes,
         )
 
+        try:
+            validate_idempotent_message_attachments(
+                message=existing_message,
+                attachment_ids=attachment_ids,
+            )
+        except AttachmentConflictError as error:
+            raise IdempotencyConflictError(str(error)) from error
+        except (
+            AttachmentValidationError,
+            AttachmentNotFoundError,
+            AttachmentPermissionError,
+        ) as error:
+            raise DirectMessageValidationError(str(error)) from error
+
+
+
         return DirectMessageResult(
             room=existing_message.room,
             message=existing_message,
@@ -891,6 +917,25 @@ def send_direct_message(
 
         message.full_clean()
         message.save(force_insert=True)
+
+        try:
+            validate_and_attach_message_attachments(
+                authenticated_user_id=sender_id,
+                sender_device_id=normalized_sender_device_id,
+                room=room,
+                message=message,
+                attachment_ids=attachment_ids,
+            )
+        except AttachmentConflictError as error:
+            raise IdempotencyConflictError(str(error)) from error
+        except (
+            AttachmentValidationError,
+            AttachmentNotFoundError,
+            AttachmentPermissionError,
+        ) as error:
+            raise DirectMessageValidationError(str(error)) from error
+
+
 
         envelope_models = []
 
@@ -1008,6 +1053,20 @@ def send_direct_message(
             client_sent_at=client_sent_at,
             envelopes=effective_existing_envelopes,
         )
+
+        try:
+            validate_idempotent_message_attachments(
+                message=existing_message,
+                attachment_ids=attachment_ids,
+            )
+        except AttachmentConflictError as error:
+            raise IdempotencyConflictError(str(error)) from error
+        except (
+            AttachmentValidationError,
+            AttachmentNotFoundError,
+            AttachmentPermissionError,
+        ) as error:
+            raise DirectMessageValidationError(str(error)) from error
 
         return DirectMessageResult(
             room=existing_message.room,

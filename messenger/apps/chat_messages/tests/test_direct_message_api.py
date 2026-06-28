@@ -17,8 +17,8 @@ from messenger_config.identity_client import (
 from apps.e2ee_devices.models import Device
 from apps.rooms.models import Room, RoomMember
 
-from ..models import Message, MessageKeyEnvelope
-
+from ..models import ContactDeliveryPolicy, Message, MessageKeyEnvelope
+from ..services import build_direct_pair_key
 
 class DirectMessageSendingAPITests(APITestCase):
     sender_device_id = uuid.UUID(
@@ -670,174 +670,333 @@ class DirectMessageSendingAPITests(APITestCase):
             1,
         )
 
-def test_deleted_contact_id_cannot_start_or_resolve_message(self):
-    self.authenticate_as("1")
+    def test_deleted_contact_id_cannot_start_or_resolve_message(self):
+        self.authenticate_as("1")
 
-    self.mock_resolve_contact.side_effect = SavedContactForbiddenError(
-        "You must save this contact before messaging."
-    )
+        self.mock_resolve_contact.side_effect = SavedContactForbiddenError(
+            "You must save this contact before messaging."
+        )
 
-    response = self.client.post(
-        self.url,
-        self.valid_payload(),
-        format="json",
-    )
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
 
-    self.assertEqual(
-        response.status_code,
-        status.HTTP_403_FORBIDDEN,
-    )
-    self.assertEqual(
-        response.json(),
-        {
-            "success": False,
-            "message": "You must save this contact before messaging.",
-        },
-    )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertEqual(
+            response.json(),
+            {
+                "success": False,
+                "message": "You must save this contact before messaging.",
+            },
+        )
 
-    self.assert_nothing_stored()
+        self.assert_nothing_stored()
+    
+    def test_blocked_sender_message_is_stored_sender_only(self):
+        """
+        Directional block rule:
 
-def test_room_id_send_requires_active_membership(self):
-    self.authenticate_as("3")
+        If user 2 blocks user 1, user 1 must not be able to deliver
+        encrypted message envelopes to user 2.
 
-    room = Room.objects.create(
-        room_type=Room.RoomType.DIRECT,
-    )
+        The sender should not learn the exact reason.
+        Backend stores only sender-side device_sync envelopes so sender
+        can still see their own sent message, but recipient devices do
+        not receive decryptable envelopes.
+        """
 
-    RoomMember.objects.create(
-        room=room,
-        user_id="1",
-        role=RoomMember.Role.MEMBER,
-    )
-    RoomMember.objects.create(
-        room=room,
-        user_id="2",
-        role=RoomMember.Role.MEMBER,
-    )
+        ContactDeliveryPolicy.objects.create(
+            owner_user_id="2",
+            target_user_id="1",
+            is_blocked=True,
+            policy_version=1,
+        )
 
-    payload = self.valid_payload()
-    payload.pop("recipient_contact_id")
-    payload["room_id"] = str(room.id)
+        self.authenticate_as("1")
 
-    response = self.client.post(
-        self.url,
-        payload,
-        format="json",
-    )
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
 
-    self.assertEqual(
-        response.status_code,
-        status.HTTP_409_CONFLICT,
-    )
-    self.assertEqual(
-        response.json(),
-        {
-            "success": False,
-            "message": "Direct room is unavailable.",
-        },
-    )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
 
-    self.assert_nothing_stored()
+        data = response.json()["data"]
 
-def test_room_id_send_rejects_group_room(self):
-    self.authenticate_as("1")
+        self.assertTrue(data["recipient_delivery_blocked"])
+        self.assertEqual(data["envelope_count"], 1)
 
-    room = Room.objects.create(
-        room_type=Room.RoomType.GROUP,
-        name="Not direct",
-    )
+        self.assertEqual(Message.objects.count(), 1)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 1)
 
-    RoomMember.objects.create(
-        room=room,
-        user_id="1",
-        role=RoomMember.Role.MEMBER,
-    )
-    RoomMember.objects.create(
-        room=room,
-        user_id="2",
-        role=RoomMember.Role.MEMBER,
-    )
+        message = Message.objects.get()
+        envelope = MessageKeyEnvelope.objects.get()
 
-    payload = self.valid_payload()
-    payload.pop("recipient_contact_id")
-    payload["room_id"] = str(room.id)
+        self.assertEqual(message.sender_user_id, "1")
+        self.assertEqual(envelope.message_id, message.id)
+        self.assertEqual(envelope.recipient_device_id, self.sender_device_id)
+        self.assertEqual(
+            envelope.protocol,
+            MessageKeyEnvelope.Protocol.DEVICE_SYNC,
+        )
 
-    response = self.client.post(
-        self.url,
-        payload,
-        format="json",
-    )
+    def test_blocker_can_still_send_to_blocked_contact(self):
+        """
+        Directional block rule:
 
-    self.assertEqual(
-        response.status_code,
-        status.HTTP_409_CONFLICT,
-    )
-    self.assertEqual(
-        response.json()["success"],
-        False,
-    )
+        If user 2 blocks user 1, user 2 can still send messages to user 1.
+        Blocking hides/protects user 2 from inbound delivery by user 1,
+        but it does not prevent user 2 from sending outbound messages.
+        """
 
-def test_cannot_send_with_both_contact_id_and_room_id(self):
-    self.authenticate_as("1")
+        ContactDeliveryPolicy.objects.create(
+            owner_user_id="2",
+            target_user_id="1",
+            is_blocked=True,
+            policy_version=1,
+        )
 
-    room = Room.objects.create(
-        room_type=Room.RoomType.DIRECT,
-    )
+        self.mock_resolve_contact.return_value = SimpleNamespace(
+            contact_id=str(self.recipient_contact_id),
+            contact_user_id="1",
+            saved_name="Blocked contact",
+            contact_number="8888888888",
+        )
 
-    RoomMember.objects.create(
-        room=room,
-        user_id="1",
-        role=RoomMember.Role.MEMBER,
-    )
-    RoomMember.objects.create(
-        room=room,
-        user_id="2",
-        role=RoomMember.Role.MEMBER,
-    )
+        self.authenticate_as("2")
 
-    payload = self.valid_payload()
-    payload["room_id"] = str(room.id)
+        payload = {
+            "recipient_contact_id": self.recipient_contact_id,
+            "sender_device_id": str(self.recipient_device_id),
+            "client_message_id": str(
+                uuid.UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+            ),
+            "message_type": "text",
+            "encrypted_payload": "BLOCKER_OUTBOUND_CIPHERTEXT",
+            "encryption_metadata": {
+                "algorithm": "xchacha20poly1305",
+                "nonce": "BLOCKER_OUTBOUND_NONCE",
+            },
+            "encryption_version": 1,
+            "envelopes": [
+                {
+                    "recipient_device_id": str(self.recipient_device_id),
+                    "protocol": "device_sync",
+                    "session_reference": "blocker-sender-sync-session",
+                    "wrapped_message_key": "WRAPPED_KEY_FOR_BLOCKER",
+                    "key_wrap_metadata": {
+                        "algorithm": "device-sync-v1",
+                    },
+                    "envelope_version": 1,
+                },
+                {
+                    "recipient_device_id": str(self.sender_device_id),
+                    "protocol": "double_ratchet",
+                    "session_reference": "blocked-contact-ratchet-session",
+                    "wrapped_message_key": "WRAPPED_KEY_FOR_BLOCKED_CONTACT",
+                    "key_wrap_metadata": {
+                        "algorithm": "double-ratchet",
+                        "message_number": 1,
+                    },
+                    "envelope_version": 1,
+                },
+            ],
+        }
 
-    response = self.client.post(
-        self.url,
-        payload,
-        format="json",
-    )
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
 
-    self.assertEqual(
-        response.status_code,
-        status.HTTP_400_BAD_REQUEST,
-    )
-    self.assertEqual(
-        response.json()["success"],
-        False,
-    )
-    self.assertIn(
-        "recipient",
-        response.json()["errors"],
-    )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
 
-def test_cannot_send_without_contact_id_or_room_id(self):
-    self.authenticate_as("1")
+        data = response.json()["data"]
 
-    payload = self.valid_payload()
-    payload.pop("recipient_contact_id")
+        self.assertFalse(data["recipient_delivery_blocked"])
+        self.assertEqual(data["envelope_count"], 2)
 
-    response = self.client.post(
-        self.url,
-        payload,
-        format="json",
-    )
+        self.assertEqual(Message.objects.count(), 1)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 2)
 
-    self.assertEqual(
-        response.status_code,
-        status.HTTP_400_BAD_REQUEST,
-    )
-    self.assertEqual(
-        response.json()["success"],
-        False,
-    )
-    self.assertIn(
-        "recipient",
-        response.json()["errors"],
-    )
+        message = Message.objects.get()
+
+        self.assertEqual(message.sender_user_id, "2")
+
+        envelope_devices = set(
+            MessageKeyEnvelope.objects.filter(
+                message=message,
+            ).values_list("recipient_device_id", flat=True)
+        )
+
+        self.assertEqual(
+            envelope_devices,
+            {
+                self.sender_device_id,
+                self.recipient_device_id,
+            },
+        )
+
+    def test_room_id_send_requires_active_membership(self):
+        self.authenticate_as("3")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            response.json(),
+            {
+                "success": False,
+                "message": "Direct room is unavailable.",
+            },
+        )
+
+        self.assertEqual(Room.objects.count(), 1)
+        self.assertEqual(RoomMember.objects.count(), 2)
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
+
+    def test_room_id_send_rejects_group_room(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.GROUP,
+            name="Not direct",
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            response.json()["success"],
+            False,
+        )
+
+    def test_cannot_send_with_both_contact_id_and_room_id(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        payload = self.valid_payload()
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(
+            response.json()["success"],
+            False,
+        )
+        self.assertIn(
+            "recipient",
+            response.json()["errors"],
+        )
+
+    def test_cannot_send_without_contact_id_or_room_id(self):
+        self.authenticate_as("1")
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(
+            response.json()["success"],
+            False,
+        )
+        self.assertIn(
+            "recipient",
+            response.json()["errors"],
+        )

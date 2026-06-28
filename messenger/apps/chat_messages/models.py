@@ -364,7 +364,6 @@ class MessageReceipt(models.Model):
         if errors:
             raise ValidationError(errors)
 
-
 class EncryptedAttachment(models.Model):
     """
     Server-visible metadata for an encrypted attachment.
@@ -388,6 +387,7 @@ class EncryptedAttachment(models.Model):
     class UploadStatus(models.TextChoices):
         INITIATED = "initiated", "Initiated"
         COMPLETED = "completed", "Completed"
+        ATTACHED = "attached", "Attached"
         DELETED = "deleted", "Deleted"
         EXPIRED = "expired", "Expired"
 
@@ -416,6 +416,15 @@ class EncryptedAttachment(models.Model):
     storage_key = models.CharField(
         max_length=512,
         unique=True,
+    )
+
+    resource_type = models.CharField(
+        max_length=20,
+        default="raw",
+    )
+
+    ciphertext_size_hint = models.PositiveBigIntegerField(
+        default=0,
     )
 
     ciphertext_sha256 = models.CharField(
@@ -454,6 +463,59 @@ class EncryptedAttachment(models.Model):
         blank=True,
     )
 
+    upload_signature_expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    upload_completed_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    cloudinary_asset_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
+
+    cloudinary_version = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
+
+    attached_room = models.ForeignKey(
+        Room,
+        on_delete=models.PROTECT,
+        related_name="encrypted_attachments",
+        null=True,
+        blank=True,
+    )
+
+    attached_message = models.ForeignKey(
+        Message,
+        on_delete=models.PROTECT,
+        related_name="encrypted_attachments",
+        null=True,
+        blank=True,
+    )
+
+    attached_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    deleted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    last_cloudinary_error = models.TextField(
+        blank=True,
+        default="",
+    )
+
     class Meta:
         db_table = "messenger_encrypted_attachments"
         ordering = [
@@ -488,6 +550,35 @@ class EncryptedAttachment(models.Model):
                 ],
                 name="attach_status_time_idx",
             ),
+            models.Index(
+                fields=[
+                    "uploader_user_id",
+                    "upload_status",
+                    "created_at",
+                ],
+                name="attach_user_status_idx",
+            ),
+            models.Index(
+                fields=[
+                    "upload_status",
+                    "upload_signature_expires_at",
+                ],
+                name="attach_status_exp_idx",
+            ),
+            models.Index(
+                fields=[
+                    "attached_room",
+                    "attached_message",
+                ],
+                name="attach_room_msg_idx",
+            ),
+            models.Index(
+                fields=[
+                    "storage_provider",
+                    "storage_key",
+                ],
+                name="attach_provider_key_idx",
+            ),
         ]
 
     def __str__(self) -> str:
@@ -501,6 +592,10 @@ class EncryptedAttachment(models.Model):
 
         self.uploader_user_id = self.uploader_user_id.strip()
         self.storage_key = self.storage_key.strip()
+        self.resource_type = str(self.resource_type or "").strip()
+        self.cloudinary_asset_id = self.cloudinary_asset_id.strip()
+        self.cloudinary_version = self.cloudinary_version.strip()
+        self.last_cloudinary_error = self.last_cloudinary_error.strip()
         self.ciphertext_sha256 = self.ciphertext_sha256.strip().lower()
 
         errors = {}
@@ -522,6 +617,11 @@ class EncryptedAttachment(models.Model):
 
         if not self.storage_key:
             errors["storage_key"] = "Storage key is required."
+
+        if self.resource_type != "raw":
+            errors["resource_type"] = (
+                "Encrypted attachment uploads must use raw resource_type."
+            )
 
         forbidden_storage_fragments = (
             "plaintext",
@@ -557,15 +657,48 @@ class EncryptedAttachment(models.Model):
                 )
 
         if (
-            self.upload_status == self.UploadStatus.COMPLETED
+            self.upload_status
+            in {
+                self.UploadStatus.COMPLETED,
+                self.UploadStatus.ATTACHED,
+            }
             and not self.completed_at
         ):
             errors["completed_at"] = (
-                "Completed attachments require completed_at."
+                "Completed or attached attachments require completed_at."
+            )
+
+        if self.upload_status == self.UploadStatus.ATTACHED:
+            if not self.attached_room_id:
+                errors["attached_room"] = (
+                    "Attached attachments require attached_room."
+                )
+
+            if not self.attached_message_id:
+                errors["attached_message"] = (
+                    "Attached attachments require attached_message."
+                )
+
+            if not self.attached_at:
+                errors["attached_at"] = (
+                    "Attached attachments require attached_at."
+                )
+
+        if (
+            self.attached_message_id
+            and self.attached_room_id
+            and self.attached_message is not None
+            and self.attached_message.room_id != self.attached_room_id
+        ):
+            errors["attached_message"] = (
+                "Attached message must belong to attached_room."
             )
 
         if errors:
             raise ValidationError(errors)
+
+
+
 
 
 
