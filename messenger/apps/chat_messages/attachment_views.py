@@ -4,17 +4,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .attachment_serializers import (
+    CloudinarySignedUploadSerializer,
     EncryptedAttachmentCompleteSerializer,
     EncryptedAttachmentDeleteSerializer,
     EncryptedAttachmentInitiateSerializer,
     EncryptedAttachmentSerializer,
 )
+
 from .attachment_services import (
     AttachmentConflictError,
     AttachmentNotFoundError,
     AttachmentPermissionError,
+    AttachmentStorageConfigurationError,
     AttachmentValidationError,
     complete_encrypted_attachment,
+    create_signed_cloudinary_attachment_upload,
     delete_encrypted_attachment,
     get_encrypted_attachment_download,
     initiate_encrypted_attachment,
@@ -40,6 +44,71 @@ def _service_error_response(error, response_status):
         },
         status=response_status,
     )
+
+
+
+
+class CloudinarySignedUploadView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+    ]
+
+    def post(self, request) -> Response:
+        serializer = CloudinarySignedUploadSerializer(
+            data=request.data,
+        )
+
+        if not serializer.is_valid():
+            return _validation_error_response(serializer.errors)
+
+        data = serializer.validated_data
+
+        try:
+            result = create_signed_cloudinary_attachment_upload(
+                authenticated_user_id=str(request.user.user_id),
+                device_id=data["device_id"],
+                media_category=data.get("media_category", "file"),
+                ciphertext_size_hint=data["ciphertext_size_hint"],
+                expires_in_seconds=data.get("expires_in_seconds"),
+            )
+        except AttachmentValidationError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_400_BAD_REQUEST,
+            )
+        except AttachmentPermissionError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_403_FORBIDDEN,
+            )
+        except AttachmentNotFoundError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_404_NOT_FOUND,
+            )
+        except AttachmentConflictError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_409_CONFLICT,
+            )
+        except AttachmentStorageConfigurationError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Signed encrypted attachment upload created.",
+                "data": result["payload"],
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+
+
 
 
 class EncryptedAttachmentInitiateView(APIView):
@@ -140,6 +209,11 @@ class EncryptedAttachmentCompleteView(APIView):
                 error,
                 status.HTTP_409_CONFLICT,
             )
+        except AttachmentStorageConfigurationError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
             {
@@ -192,14 +266,31 @@ class EncryptedAttachmentDownloadView(APIView):
                 error,
                 status.HTTP_409_CONFLICT,
             )
-
+        
+        except AttachmentStorageConfigurationError as error:
+            return _service_error_response(
+                error,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        
+        attachment = result.attachment
         return Response(
             {
                 "success": True,
-                "message": "Encrypted attachment download metadata retrieved.",
-                "data": EncryptedAttachmentSerializer(
-                    result.attachment,
-                ).data,
+                "message": "Encrypted attachment download URL created.",
+                "data": {
+                    "attachment": {
+                        "id": str(attachment.id),
+                        "storage_provider": attachment.storage_provider,
+                        "storage_key": attachment.storage_key,
+                        "ciphertext_sha256": attachment.ciphertext_sha256,
+                        "ciphertext_size": attachment.ciphertext_size,
+                        "media_category": attachment.media_category,
+                        "upload_status": attachment.upload_status,
+                    },
+                    "download_url": result.download_url,
+                    "expires_at": result.expires_at,
+                },
             },
             status=status.HTTP_200_OK,
         )

@@ -1,6 +1,16 @@
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+
+from .attachment_services import (
+    AttachmentConflictError,
+    AttachmentNotFoundError,
+    AttachmentPermissionError,
+    AttachmentValidationError,
+    validate_and_attach_message_attachments,
+    validate_idempotent_message_attachments,
+)
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from apps.group_chat.constants import (
@@ -644,6 +654,7 @@ def send_encrypted_group_message(
     reply_to_message_id: Any = None,
     client_sent_at=None,
     recovery_envelopes=None,
+    attachment_ids: list[Any] | None = None,
 ) -> GroupMessageSendResult:
     actor_user_id = _normalize_user_id(
         authenticated_user_id,
@@ -750,6 +761,20 @@ def send_encrypted_group_message(
                 recovery_envelopes=validated_recovery_envelopes,
             )
         ):
+            try:
+                validate_idempotent_message_attachments(
+                    message=existing_message,
+                    attachment_ids=attachment_ids,
+                )
+            except AttachmentConflictError as error:
+                raise GroupMessageConflictError(str(error)) from error
+            except (
+                AttachmentValidationError,
+                AttachmentNotFoundError,
+                AttachmentPermissionError,
+            ) as error:
+                raise GroupMessageValidationError(str(error)) from error
+
             return GroupMessageSendResult(
                 encryption=existing_encryption,
                 message_created=False,
@@ -809,6 +834,23 @@ def send_encrypted_group_message(
             message=message,
             recovery_envelopes=validated_recovery_envelopes,
         )
+
+        try:
+            validate_and_attach_message_attachments(
+                authenticated_user_id=actor_user_id,
+                sender_device_id=sender_device.id,
+                room=context.room,
+                message=message,
+                attachment_ids=attachment_ids,
+            )
+        except AttachmentConflictError as error:
+            raise GroupMessageConflictError(str(error)) from error
+        except (
+            AttachmentValidationError,
+            AttachmentNotFoundError,
+            AttachmentPermissionError,
+        ) as error:
+            raise GroupMessageValidationError(str(error)) from error
     except IntegrityError as error:
         raise GroupMessageConflictError(
             "Could not create group encryption metadata because of a conflict."

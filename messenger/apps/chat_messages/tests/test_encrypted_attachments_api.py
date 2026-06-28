@@ -1,5 +1,6 @@
 import uuid
-
+from django.test import override_settings
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -73,11 +74,14 @@ class EncryptedAttachmentAPITests(APITestCase):
         self.assertEqual(EncryptedAttachment.objects.count(), 1)
 
         attachment = EncryptedAttachment.objects.get()
+
         self.assertEqual(attachment.uploader_user_id, GROUP_OWNER_USER_ID)
         self.assertEqual(
             attachment.upload_status,
             EncryptedAttachment.UploadStatus.INITIATED,
         )
+        self.assertEqual(attachment.media_category, "image")
+        self.assertEqual(attachment.storage_provider, "cloudinary")
 
     def test_forbidden_plaintext_storage_key_is_rejected(self):
         device = create_device(user_id=GROUP_OWNER_USER_ID)
@@ -109,6 +113,8 @@ class EncryptedAttachmentAPITests(APITestCase):
             format="json",
         )
 
+        self.assertEqual(initiate_response.status_code, status.HTTP_201_CREATED)
+
         attachment_id = initiate_response.json()["data"]["id"]
 
         response = self.client.post(
@@ -124,12 +130,14 @@ class EncryptedAttachmentAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         attachment = EncryptedAttachment.objects.get(id=attachment_id)
+
         self.assertEqual(
             attachment.upload_status,
             EncryptedAttachment.UploadStatus.COMPLETED,
         )
         self.assertEqual(attachment.ciphertext_size, 4096)
         self.assertEqual(attachment.ciphertext_sha256, "a" * 64)
+        self.assertIsNotNone(attachment.completed_at)
 
     def test_other_user_cannot_complete_attachment(self):
         owner_device = create_device(user_id=GROUP_OWNER_USER_ID)
@@ -145,6 +153,8 @@ class EncryptedAttachmentAPITests(APITestCase):
             },
             format="json",
         )
+
+        self.assertEqual(initiate_response.status_code, status.HTTP_201_CREATED)
 
         attachment_id = initiate_response.json()["data"]["id"]
 
@@ -162,6 +172,13 @@ class EncryptedAttachmentAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    @override_settings(
+        CLOUDINARY_URL="cloudinary://public-api-key:private-api-secret@test-cloud",
+        CLOUDINARY_FOLDER="myna/test/attachments",
+        ATTACHMENT_CLOUDINARY_RESOURCE_TYPE="raw",
+        ATTACHMENT_DOWNLOAD_URL_TTL_SECONDS=300,
+        ATTACHMENT_DOWNLOAD_URL_MAX_TTL_SECONDS=900,
+    )
     def test_download_completed_attachment_metadata(self):
         device = create_device(user_id=GROUP_OWNER_USER_ID)
         authenticate_client(self.client, GROUP_OWNER_USER_ID)
@@ -175,9 +192,11 @@ class EncryptedAttachmentAPITests(APITestCase):
             format="json",
         )
 
+        self.assertEqual(initiate_response.status_code, status.HTTP_201_CREATED)
+
         attachment_id = initiate_response.json()["data"]["id"]
 
-        self.client.post(
+        complete_response = self.client.post(
             self.complete_url(attachment_id),
             {
                 "device_id": str(device.id),
@@ -187,6 +206,8 @@ class EncryptedAttachmentAPITests(APITestCase):
             format="json",
         )
 
+        self.assertEqual(complete_response.status_code, status.HTTP_200_OK)
+
         response = self.client.get(
             self.download_url(attachment_id),
             {
@@ -195,7 +216,17 @@ class EncryptedAttachmentAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.json()["data"]["id"], attachment_id)
+
+        data = response.json()["data"]
+        attachment_data = data["attachment"]
+
+        self.assertEqual(attachment_data["id"], attachment_id)
+        self.assertEqual(attachment_data["ciphertext_sha256"], "c" * 64)
+        self.assertEqual(attachment_data["ciphertext_size"], 200)
+        self.assertIn("download_url", data)
+        self.assertIn("expires_at", data)
+        self.assertNotIn("api_secret", data)
+        self.assertNotIn("private-api-secret", str(data))
 
     def test_delete_attachment_is_idempotent(self):
         device = create_device(user_id=GROUP_OWNER_USER_ID)
@@ -210,6 +241,8 @@ class EncryptedAttachmentAPITests(APITestCase):
             format="json",
         )
 
+        self.assertEqual(initiate_response.status_code, status.HTTP_201_CREATED)
+
         attachment_id = initiate_response.json()["data"]["id"]
 
         first_response = self.client.delete(
@@ -219,6 +252,7 @@ class EncryptedAttachmentAPITests(APITestCase):
             },
             format="json",
         )
+
         second_response = self.client.delete(
             self.delete_url(attachment_id),
             {
@@ -231,7 +265,57 @@ class EncryptedAttachmentAPITests(APITestCase):
         self.assertEqual(second_response.status_code, status.HTTP_200_OK)
 
         attachment = EncryptedAttachment.objects.get(id=attachment_id)
+
         self.assertEqual(
             attachment.upload_status,
             EncryptedAttachment.UploadStatus.DELETED,
         )
+
+        
+    def test_new_attachment_defaults_resource_type_raw(self):
+        device = create_device(user_id=GROUP_OWNER_USER_ID)
+        authenticate_client(self.client, GROUP_OWNER_USER_ID)
+
+        response = self.client.post(
+            self.initiate_url(),
+            {
+                "device_id": str(device.id),
+                "media_category": "file",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        attachment = EncryptedAttachment.objects.get()
+
+        self.assertEqual(attachment.resource_type, "raw")
+
+    def test_completed_status_requires_completed_at(self):
+        device = create_device(user_id=GROUP_OWNER_USER_ID)
+
+        attachment = EncryptedAttachment(
+            uploader_user_id=GROUP_OWNER_USER_ID,
+            uploader_device=device,
+            storage_key=f"encrypted-attachments/{uuid.uuid4()}",
+            upload_status=EncryptedAttachment.UploadStatus.COMPLETED,
+            resource_type="raw",
+        )
+
+        with self.assertRaises(Exception):
+            attachment.full_clean()
+
+    def test_attached_status_requires_message_room_and_attached_at(self):
+        device = create_device(user_id=GROUP_OWNER_USER_ID)
+
+        attachment = EncryptedAttachment(
+            uploader_user_id=GROUP_OWNER_USER_ID,
+            uploader_device=device,
+            storage_key=f"encrypted-attachments/{uuid.uuid4()}",
+            upload_status=EncryptedAttachment.UploadStatus.ATTACHED,
+            completed_at=timezone.now(),
+            resource_type="raw",
+        )
+
+        with self.assertRaises(Exception):
+            attachment.full_clean()
