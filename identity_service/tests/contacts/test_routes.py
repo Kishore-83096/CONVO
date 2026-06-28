@@ -322,3 +322,46 @@ def test_account_deletion_removes_owned_and_referenced_contacts(
     assert db.session.scalar(
         db.select(User).where(User.username == TARGET_PAYLOAD["username"])
     ) is not None
+
+def test_contact_ghost_default_duration_and_unghost(
+    client,
+    contact_users,
+):
+    added = add_target_contact(client, contact_users)
+    contact_id = added.get_json()["data"]["id"]
+
+    ghosted = client.patch(
+        f"/api/v1/contacts/{contact_id}/ghost",
+        headers=contact_users["owner_headers"],
+        json={
+            "is_ghosted": True,
+        },
+    )
+
+    assert ghosted.status_code == 200
+    ghost_data = ghosted.get_json()["data"]
+    ghost_policy = ghost_data["delivery_policy"]
+
+    assert ghosted.get_json()["message"] == "Contact ghosted."
+    assert ghost_policy["is_ghosted"] is True
+    assert ghost_policy["ghost_until"] is not None
+    assert ghost_policy["ghost_permanent"] is False
+    assert ghost_policy["ghost_duration_option"] == "24h"
+    assert ghost_policy["policy_version"] >= 2
+
+    unghosted = client.patch(
+        f"/api/v1/contacts/{contact_id}/ghost",
+        headers=contact_users["owner_headers"],
+        json={
+            "is_ghosted": False,
+        },
+    )
+
+    assert unghosted.status_code == 200
+    unghost_policy = unghosted.get_json()["data"]["delivery_policy"]
+
+    assert unghosted.get_json()["message"] == "Contact unghosted."
+    assert unghost_policy["is_ghosted"] is False
+    assert unghost_policy["ghost_until"] is None
+    assert unghost_policy["ghost_permanent"] is False
+    assert unghost_policy["ghost_duration_option"] is None

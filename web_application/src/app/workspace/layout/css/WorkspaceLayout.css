@@ -517,6 +517,17 @@ body,
   overflow-x: hidden;
 }
 
+.sidebar-state {
+  padding: 16px 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sidebar-state[role="alert"] {
+  color: var(--danger-text);
+}
+
 .conversation-item,
 .saved-contact-item,
 .story-item {
@@ -715,6 +726,22 @@ body,
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.chat-refresh-button {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex: 0 0 34px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.chat-refresh-button svg {
+  width: 17px;
+  height: 17px;
+  min-width: 17px;
 }
 
 
@@ -1079,6 +1106,20 @@ body,
   background-color: var(--active-background);
 }
 
+.main-icon-button:disabled,
+.composer-icon-button:disabled,
+.sidebar-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.main-icon-button:disabled:hover,
+.composer-icon-button:disabled:hover,
+.sidebar-action-button:disabled:hover {
+  background-color: transparent;
+  box-shadow: none;
+}
+
 .main-icon-button:active,
 .composer-icon-button:active {
   transform: scale(0.92);
@@ -1120,6 +1161,52 @@ body,
   display: none;
   width: 0;
   height: 0;
+}
+
+.conversation-empty-state {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.conversation-empty-state svg {
+  width: 42px;
+  height: 42px;
+  stroke-width: 1.5;
+}
+
+.conversation-empty-state h2 {
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.conversation-empty-state p {
+  max-width: 260px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.conversation-status {
+  display: grid;
+  gap: 3px;
+  padding: 0 20px 8px;
+  background-color: var(--main-panel-background);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.conversation-status p {
+  width: min(720px, 100%);
+  justify-self: center;
+}
+
+.conversation-status p[role="alert"] {
+  color: var(--danger-text);
 }
 
 .message-date {
@@ -2675,6 +2762,190 @@ body,
   color: var(--danger-text);
 }
 
+.messenger-device-header {
+  padding-bottom: 0;
+}
+
+.messenger-device-content {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.messenger-device-status {
+  display: flex;
+  max-width: 840px;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background-color: var(--surface-background);
+}
+
+.messenger-device-status-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--send-button-background) 14%, transparent);
+  color: var(--send-button-background);
+}
+
+.messenger-device-status-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.messenger-device-status strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-primary);
+}
+
+.messenger-device-status p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.messenger-device-actions {
+  display: flex;
+  max-width: 840px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.messenger-device-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.messenger-device-actions svg {
+  width: 18px;
+  height: 18px;
+}
+
+.messenger-device-details {
+  display: grid;
+  max-width: 840px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.messenger-device-details div {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--divider);
+  border-radius: 7px;
+  background-color: var(--soft-background);
+}
+
+.messenger-device-details dt {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.messenger-device-details dd {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.messenger-device-result {
+  margin-top: 4px;
+}
+
+.messenger-device-prekeys {
+  display: grid;
+  max-width: 840px;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background-color: var(--surface-background);
+}
+
+.messenger-device-prekeys strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-primary);
+}
+
+.messenger-device-prekeys p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.messenger-device-prekeys .primary-action-button {
+  width: fit-content;
+}
+
+.messenger-device-claim-form {
+  display: grid;
+  max-width: 520px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.messenger-device-claim-form .form-field {
+  gap: 7px;
+}
+
+.messenger-device-claim-form .primary-action-button {
+  min-width: 178px;
+}
+
+.messenger-device-link-button {
+  width: fit-content;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.messenger-device-link-button:hover {
+  color: var(--text-primary);
+}
+
+.messenger-device-advanced {
+  display: grid;
+  max-width: 840px;
+  gap: 10px;
+}
+
+.messenger-device-advanced-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background-color: var(--soft-background);
+}
+
+.messenger-device-advanced-panel p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.messenger-device-advanced-panel .danger-action-button {
+  width: fit-content;
+}
+
 .profile-list {
   display: grid;
   max-width: 840px;
@@ -3153,6 +3424,14 @@ img.profile-page-avatar {
   .profile-row-actions {
     width: 100%;
   }
+
+  .messenger-device-claim-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .messenger-device-claim-form .primary-action-button {
+    width: 100%;
+  }
 }
 
 /* ==================================================
@@ -3609,4 +3888,11 @@ body {
   .confirm-modal-actions .danger-action-button {
     width: 100%;
   }
+}
+
+.main-icon-button:disabled:hover,
+.composer-icon-button:disabled:hover,
+.sidebar-action-button:disabled:hover {
+  background-color: transparent;
+  box-shadow: none;
 }

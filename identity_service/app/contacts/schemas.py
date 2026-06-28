@@ -43,3 +43,32 @@ class RenameContactSchema(Schema):
         if isinstance(normalized.get("saved_name"), str):
             normalized["saved_name"] = normalized["saved_name"].strip()
         return normalized
+
+
+class BlockContactSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    is_blocked = fields.Boolean(required=True)
+
+class GhostContactSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    is_ghosted = fields.Boolean(required=True)
+
+    duration = fields.String(
+        required=False,
+        load_default="24h",
+        validate=validate.OneOf(
+            [
+                "1h",
+                "6h",
+                "12h",
+                "24h",
+                "permanent",
+            ]
+        ),
+    )
+
+

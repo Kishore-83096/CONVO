@@ -16,12 +16,14 @@ export interface ContactSearchResult {
 
 export interface ContactSummary {
   id: number
+  contact_user_id: number
   saved_name: string
   profile_picture: ProfilePicture | null
 }
 
 export interface ContactDetail {
   id: number
+  contact_user_id: number
   saved_name: string
   contact_number: number
   username: string

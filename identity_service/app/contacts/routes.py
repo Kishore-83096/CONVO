@@ -3,8 +3,10 @@ from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 
 from app.contacts.schemas import (
     AddContactSchema,
+    BlockContactSchema,
     RenameContactSchema,
     SearchContactSchema,
+    GhostContactSchema,
 )
 from app.contacts.services import (
     add_contact,
@@ -15,7 +17,10 @@ from app.contacts.services import (
     search_contact,
     serialize_contact_detail,
     serialize_contact_summary,
+    serialize_contact_with_delivery_policy,
     serialize_search_result,
+    set_contact_block_status,
+    set_contact_ghost_status,
 )
 from app.extensions import limiter
 from app.shared.exceptions import ApiError
@@ -23,10 +28,12 @@ from app.shared.responses import api_response
 
 
 contacts_blueprint = Blueprint("contacts", __name__)
+
 search_schema = SearchContactSchema()
 add_schema = AddContactSchema()
 rename_schema = RenameContactSchema()
-
+block_schema = BlockContactSchema()
+ghost_schema = GhostContactSchema()
 
 @contacts_blueprint.before_request
 def require_authentication():
@@ -110,11 +117,56 @@ def update(contact_id: int):
     )
 
 
+@contacts_blueprint.patch("/<int:contact_id>/block")
+def update_block_status(contact_id: int):
+    payload = block_schema.load(json_request_body())
+
+    contact, policy = set_contact_block_status(
+        current_user_id(),
+        contact_id,
+        payload,
+    )
+
+    return api_response(
+        success=True,
+        message=(
+            "Contact blocked."
+            if policy.is_blocked
+            else "Contact unblocked."
+        ),
+        data=serialize_contact_with_delivery_policy(contact, policy),
+        status_code=200,
+    )
+
+
 @contacts_blueprint.delete("/<int:contact_id>")
 def delete(contact_id: int):
     delete_contact(current_user_id(), contact_id)
     return api_response(
         success=True,
         message="Contact deleted.",
+        status_code=200,
+    )
+
+
+
+@contacts_blueprint.patch("/<int:contact_id>/ghost")
+def update_ghost_status(contact_id: int):
+    payload = ghost_schema.load(json_request_body())
+
+    contact, policy = set_contact_ghost_status(
+        current_user_id(),
+        contact_id,
+        payload,
+    )
+
+    return api_response(
+        success=True,
+        message=(
+            "Contact ghosted."
+            if policy.ghost_permanent or policy.ghost_until
+            else "Contact unghosted."
+        ),
+        data=serialize_contact_with_delivery_policy(contact, policy),
         status_code=200,
     )

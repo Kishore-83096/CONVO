@@ -1,0 +1,138 @@
+from django.urls import path
+
+from .views.epochs import (
+    CurrentGroupEpochView,
+    GroupEpochListView,
+    GroupEpochRotateView,
+)
+from .views.group_recovery import GroupRecoveryRecipientsView
+from .views.groups import GroupDetailUpdateView, GroupListCreateView
+from .views.memberships import (
+    GroupLeaveView,
+    GroupMemberBanView,
+    GroupMemberListCreateView,
+    GroupMemberRemoveView,
+    GroupMemberRoleView,
+    GroupMemberUnbanView,
+    GroupOwnershipTransferView,
+)
+from .views.sender_keys import (
+    GroupDeviceRosterView,
+    GroupSenderKeyDistributionAcknowledgeView,
+    GroupSenderKeyDistributionInboxView,
+    GroupSenderKeyDistributionStoreView,
+    GroupSenderKeyPendingView,
+    GroupSenderKeyRegisterView,
+    GroupSenderKeyRevokeView,
+    MyGroupSenderKeyView,
+)
+
+app_name = "group_chat"
+
+urlpatterns = [
+    path(
+        "",
+        GroupListCreateView.as_view(),
+        name="group-list-create",
+    ),
+    path(
+        "<uuid:group_id>/",
+        GroupDetailUpdateView.as_view(),
+        name="group-detail",
+    ),
+    path(
+        "<uuid:group_id>/epochs/current/",
+        CurrentGroupEpochView.as_view(),
+        name="group-current-epoch",
+    ),
+    path(
+        "<uuid:group_id>/epochs/",
+        GroupEpochListView.as_view(),
+        name="group-epoch-list",
+    ),
+    path(
+        "<uuid:group_id>/epochs/rotate/",
+        GroupEpochRotateView.as_view(),
+        name="group-epoch-rotate",
+    ),
+    path(
+        "<uuid:group_id>/devices/",
+        GroupDeviceRosterView.as_view(),
+        name="group-device-roster",
+    ),
+    path(
+        "<uuid:group_id>/sender-keys/register/",
+        GroupSenderKeyRegisterView.as_view(),
+        name="group-sender-key-register",
+    ),
+    path(
+        "<uuid:group_id>/sender-keys/mine/",
+        MyGroupSenderKeyView.as_view(),
+        name="group-sender-key-mine",
+    ),
+    path(
+        "<uuid:group_id>/sender-keys/<uuid:sender_key_id>/",
+        GroupSenderKeyRevokeView.as_view(),
+        name="group-sender-key-revoke",
+    ),
+    path(
+        "<uuid:group_id>/sender-keys/<uuid:sender_key_id>/distributions/",
+        GroupSenderKeyDistributionStoreView.as_view(),
+        name="group-sender-key-distributions",
+    ),
+    path(
+        "<uuid:group_id>/sender-keys/<uuid:sender_key_id>/pending/",
+        GroupSenderKeyPendingView.as_view(),
+        name="group-sender-key-pending",
+    ),
+    path(
+        "<uuid:group_id>/sender-key-distributions/inbox/",
+        GroupSenderKeyDistributionInboxView.as_view(),
+        name="group-sender-key-distribution-inbox",
+    ),
+    path(
+        "<uuid:group_id>/sender-key-distributions/acknowledge/",
+        GroupSenderKeyDistributionAcknowledgeView.as_view(),
+        name="group-sender-key-distribution-acknowledge",
+    ),
+    path(
+        "<uuid:group_id>/members/",
+        GroupMemberListCreateView.as_view(),
+        name="group-members",
+    ),
+    path(
+        "<uuid:group_id>/members/<str:user_id>/",
+        GroupMemberRemoveView.as_view(),
+        name="group-member-remove",
+    ),
+    path(
+        "<uuid:group_id>/members/<str:user_id>/role/",
+        GroupMemberRoleView.as_view(),
+        name="group-member-role",
+    ),
+    path(
+        "<uuid:group_id>/leave/",
+        GroupLeaveView.as_view(),
+        name="group-leave",
+    ),
+    path(
+        "<uuid:group_id>/transfer-ownership/",
+        GroupOwnershipTransferView.as_view(),
+        name="group-transfer-ownership",
+    ),
+    path(
+        "<uuid:group_id>/members/<str:user_id>/ban/",
+        GroupMemberBanView.as_view(),
+        name="group-member-ban",
+    ),
+    path(
+        "<uuid:group_id>/members/<str:user_id>/unban/",
+        GroupMemberUnbanView.as_view(),
+        name="group-member-unban",
+    ),
+    path(
+        "<uuid:group_id>/recovery-recipients/",
+        GroupRecoveryRecipientsView.as_view(),
+        name="group-recovery-recipients",
+    ),
+]

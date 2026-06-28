@@ -47,6 +47,23 @@ def normalize_database_url(
 
     return database_url
 
+def parse_bool(
+    value: str | None,
+    *,
+    default: bool = False,
+) -> bool:
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    return default
 
 def parse_comma_separated_values(
     value: str | None,
@@ -152,4 +169,30 @@ class Config:
     LOG_LEVEL = os.getenv(
         "LOG_LEVEL",
         "INFO",
+    )
+    
+    MESSENGER_SERVICE_BASE_URL = (
+        os.getenv(
+            "MESSENGER_SERVICE_BASE_URL",
+            "",
+        )
+        .strip()
+        .rstrip("/")
+    )
+
+    MESSENGER_INTERNAL_SECRET = os.getenv(
+        "MESSENGER_INTERNAL_SECRET",
+        "",
+    ).strip()
+
+    MESSENGER_POLICY_SYNC_TIMEOUT_SECONDS = int(
+        os.getenv(
+            "MESSENGER_POLICY_SYNC_TIMEOUT_SECONDS",
+            "3",
+        )
+    )
+
+    MESSENGER_POLICY_SYNC_REQUIRED = parse_bool(
+        os.getenv("MESSENGER_POLICY_SYNC_REQUIRED"),
+        default=False,
     )

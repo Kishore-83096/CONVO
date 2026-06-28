@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router"
 
 import { ApiClientError } from "@/api/client"
 import AccountSettingsPage from "@/app/workspace/account/pages/AccountSettingsPage"
-import { demoChats, type ChatSummary } from "@/app/workspace/chats/chats.api"
+import type { ChatSummary } from "@/app/workspace/chats/chats.api"
 import ChatListPage from "@/app/workspace/chats/pages/ChatListPage"
 import ConversationPage from "@/app/workspace/chats/pages/ConversationPage"
 import AddContactPage from "@/app/workspace/contacts/pages/AddContactPage"
@@ -23,16 +23,31 @@ import {
   getAuthSession,
 } from "@/app/identity/auth/auth-session"
 import {
+  listContacts,
+} from "@/app/identity/contacts/contacts.api"
+import type { ContactSummary } from "@/app/identity/contacts/contacts.types"
+import {
   ContactDetailPage,
   ContactsSidebar,
 } from "@/app/identity/contacts"
 import SeoMeta from "@/app/seo/SeoMeta"
 import BrandThemeIcon from "@/components/BrandThemeIcon"
+import { MessengerApiError } from "@/messenger/api/messenger-client"
+import { listMessengerRooms } from "@/messenger/api/rooms.api"
+import type { RoomListItem } from "@/messenger/api/messenger-api.types"
+import DeviceRegistrationPage from "@/messenger/ui/DeviceRegistrationPage"
 
 import "../css/WorkspaceLayout.css"
 
 type SidebarView = "chats" | "stories" | "contacts" | "addContact" | "profileMenu"
-type MainView = "empty" | "chat" | "profile" | "account" | "appearance" | "contact"
+type MainView =
+  | "empty"
+  | "chat"
+  | "profile"
+  | "account"
+  | "appearance"
+  | "contact"
+  | "device"
 type MobilePanel = "sidebar" | "main"
 
 const themes = ["light", "dark", "blue", "pink", "lavender", "mint", "sunset", "aurora"]
@@ -116,7 +131,14 @@ function savedMainView(prefix: string, legacyPrefix: string): MainView {
     storageKey(prefix, "mainView"),
     storageKey(legacyPrefix, "mainView"),
   )
-  const validViews: MainView[] = ["empty", "profile", "account", "appearance", "contact"]
+  const validViews: MainView[] = [
+    "empty",
+    "profile",
+    "account",
+    "appearance",
+    "contact",
+    "device",
+  ]
 
   if (view === "contact" && !savedSelectedContactId(prefix, legacyPrefix)) {
     return "empty"
@@ -136,6 +158,71 @@ function savedSelectedContactId(prefix: string, legacyPrefix: string) {
   return Number.isInteger(contactId) && contactId > 0 ? contactId : null
 }
 
+function formatChatTime(value: string | null) {
+  if (!value) {
+    return ""
+  }
+
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return ""
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+function buildChatSummaries(
+  rooms: RoomListItem[],
+  contacts: ContactSummary[],
+) {
+  const contactsByUserId = new Map(
+    contacts.map((contact) => [
+      String(contact.contact_user_id),
+      contact,
+    ]),
+  )
+
+  return rooms.map((room) => {
+    const matchedContactEntry = room.other_member_user_ids
+      .map((userId) => contactsByUserId.get(String(userId)))
+      .find(Boolean)
+    const recipientUserId = matchedContactEntry
+      ? String(matchedContactEntry.contact_user_id)
+      : room.other_member_user_ids[0] ?? null
+    const lastMessageAt =
+      room.last_message?.created_at
+      ?? room.updated_at
+      ?? room.created_at
+
+    return {
+      id: room.id,
+      roomId: room.id,
+      roomType: room.room_type,
+      name:
+        matchedContactEntry?.saved_name
+        || room.name
+        || "Direct chat",
+      status:
+        room.room_type === "direct"
+          ? "Direct message"
+          : `${room.member_user_ids.length} members`,
+      lastMessage: room.last_message
+        ? "Encrypted message"
+        : "No messages yet",
+      time: formatChatTime(lastMessageAt),
+      memberUserIds: room.member_user_ids,
+      recipientUserId,
+      contactId: matchedContactEntry?.id ?? null,
+      profilePicture: matchedContactEntry?.profile_picture ?? null,
+      lastMessageAt,
+    } satisfies ChatSummary
+  })
+}
+
 function WorkspaceLayoutPage() {
   const navigate = useNavigate()
   const { username } = useParams()
@@ -151,6 +238,9 @@ function WorkspaceLayoutPage() {
   )
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("sidebar")
   const [selectedChat, setSelectedChat] = useState<ChatSummary | null>(null)
+  const [chats, setChats] = useState<ChatSummary[]>([])
+  const [isLoadingChats, setIsLoadingChats] = useState(true)
+  const [chatError, setChatError] = useState("")
   const [selectedContactId, setSelectedContactId] = useState<number | null>(() =>
     savedSelectedContactId(userStorage, legacyUserStorage),
   )
@@ -189,6 +279,7 @@ function WorkspaceLayoutPage() {
       "account",
       "appearance",
       "contact",
+      "device",
     ]
 
     localStorage.setItem(
@@ -244,9 +335,61 @@ function WorkspaceLayoutPage() {
     }
   }, [navigate, session])
 
+  const loadChats = useCallback(async () => {
+    if (!session) {
+      return
+    }
+
+    setIsLoadingChats(true)
+    setChatError("")
+
+    try {
+      const [roomsResponse, contactsResponse] = await Promise.all([
+        listMessengerRooms(session.accessToken),
+        listContacts(session.accessToken),
+      ])
+      const nextChats = buildChatSummaries(
+        roomsResponse.data ?? [],
+        contactsResponse.data ?? [],
+      )
+
+      setChats(nextChats)
+      setSelectedChat((current) => {
+        if (!current) {
+          return current
+        }
+
+        return nextChats.find((chat) => chat.id === current.id) ?? current
+      })
+    } catch (error) {
+      if (
+        (error instanceof ApiClientError || error instanceof MessengerApiError)
+        && error.status === 401
+      ) {
+        clearAuthSession()
+        navigate("/", { replace: true })
+        return
+      }
+
+      setChatError(
+        error instanceof MessengerApiError && error.status === 404
+          ? "Rooms API is not available on the running messenger server. Restart the messenger backend."
+          : error instanceof ApiClientError || error instanceof MessengerApiError
+            ? error.message
+            : "Unable to load chats.",
+      )
+    } finally {
+      setIsLoadingChats(false)
+    }
+  }, [navigate, session])
+
   useEffect(() => {
     void loadMenuProfile()
   }, [loadMenuProfile])
+
+  useEffect(() => {
+    void loadChats()
+  }, [loadChats, contactsRefreshKey])
 
   if (!session) {
     return null
@@ -356,9 +499,12 @@ function WorkspaceLayoutPage() {
         <div className="sidebar-body">
           {sidebarView === "chats" ? (
             <ChatListPage
-              chats={demoChats}
+              chats={chats}
+              errorMessage={chatError}
+              isLoading={isLoadingChats}
               selectedChatId={selectedChat?.id ?? null}
               onOpenChat={openChat}
+              onRefresh={() => void loadChats()}
             />
           ) : null}
           {sidebarView === "stories" ? <StoriesPage /> : null}
@@ -395,6 +541,7 @@ function WorkspaceLayoutPage() {
               session={session}
               onOpenAppearance={() => openMainView("appearance")}
               onOpenAccount={() => openMainView("account")}
+              onOpenDevice={() => openMainView("device")}
               onOpenProfile={() => openMainView("profile")}
               onLogout={() => setIsLogoutConfirmOpen(true)}
             />
@@ -425,7 +572,12 @@ function WorkspaceLayoutPage() {
       <main className="main-body">
         {mainView === "empty" ? <EmptyPage /> : null}
         {mainView === "chat" && selectedChat ? (
-          <ConversationPage chat={selectedChat} onClose={closeMainView} />
+          <ConversationPage
+            accessToken={session.accessToken}
+            chat={selectedChat}
+            onClose={closeMainView}
+            onMessageSent={() => void loadChats()}
+          />
         ) : null}
         {mainView === "contact" && selectedContactId ? (
           <section className="main-view workspace-view active">
@@ -436,6 +588,13 @@ function WorkspaceLayoutPage() {
               onChanged={() => setContactsRefreshKey((current) => current + 1)}
             />
           </section>
+        ) : null}
+        {mainView === "device" ? (
+          <DeviceRegistrationPage
+            accessToken={session.accessToken}
+            onClose={closeMainView}
+            storageKey={storageKey(userStorage, "e2eeTab")}
+          />
         ) : null}
         {mainView === "profile" ? (
           <ProfileWorkspacePage

@@ -1,0 +1,35 @@
+In apps/e2ee_devices/urls.py, add these imports:
+
+from .recovery_views import (
+    RecoveryBundleView,
+    RecoverySetupView,
+    RecoveryStatusView,
+)
+
+Add these paths inside urlpatterns:
+
+path(
+    "recovery/setup/",
+    RecoverySetupView.as_view(),
+    name="recovery-setup",
+),
+path(
+    "recovery/status/",
+    RecoveryStatusView.as_view(),
+    name="recovery-status",
+),
+path(
+    "recovery/bundle/",
+    RecoveryBundleView.as_view(),
+    name="recovery-bundle",
+),
+
+The root project should already include this app under:
+
+/api/v1/e2ee/
+
+Final endpoints:
+
+POST /api/v1/e2ee/recovery/setup/
+GET  /api/v1/e2ee/recovery/status/
+GET  /api/v1/e2ee/recovery/bundle/

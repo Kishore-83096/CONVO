@@ -1,10 +1,17 @@
-import { LogOut, Palette, SlidersHorizontal, UserRound } from "lucide-react"
+import { KeyRound, LogOut, Palette, SlidersHorizontal, UserRound } from "lucide-react"
 
 import type { AuthSession } from "@/app/identity/auth/auth-session"
 import type { CompleteProfile } from "@/app/workspace/profile/profile.types"
 
 interface ProfileMenuProps {
-  activeMainView: "empty" | "chat" | "profile" | "account" | "appearance" | "contact"
+  activeMainView:
+    | "empty"
+    | "chat"
+    | "profile"
+    | "account"
+    | "appearance"
+    | "contact"
+    | "device"
   currentTheme: string
   isLoggingOut: boolean
   isProfileLoading: boolean
@@ -14,6 +21,7 @@ interface ProfileMenuProps {
   session: AuthSession
   onOpenAppearance: () => void
   onOpenAccount: () => void
+  onOpenDevice: () => void
   onOpenProfile: () => void
   onLogout: () => void
 }
@@ -38,6 +46,7 @@ function ProfileMenu({
   session,
   onOpenAppearance,
   onOpenAccount,
+  onOpenDevice,
   onOpenProfile,
   onLogout,
 }: ProfileMenuProps) {
@@ -106,6 +115,17 @@ function ProfileMenu({
       >
         <Palette aria-hidden="true" />
         <span>Appearance</span>
+      </button>
+
+      <button
+        className={`profile-menu-button ${
+          activeMainView === "device" ? "active" : ""
+        }`}
+        type="button"
+        onClick={onOpenDevice}
+      >
+        <KeyRound aria-hidden="true" />
+        <span>E2EE Device</span>
       </button>
 
       <button

@@ -93,7 +93,20 @@ class User(db.Model):
         back_populates="contact_user",
         cascade="all, delete-orphan",
     )
+    owned_delivery_policies = db.relationship(
+        "ContactDeliveryPolicy",
+        foreign_keys="ContactDeliveryPolicy.owner_id",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
 
+    targeted_delivery_policies = db.relationship(
+        "ContactDeliveryPolicy",
+        foreign_keys="ContactDeliveryPolicy.target_user_id",
+        back_populates="target_user",
+        cascade="all, delete-orphan",
+    )
+    
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
 

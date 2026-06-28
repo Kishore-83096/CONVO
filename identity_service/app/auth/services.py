@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from secrets import randbelow
 
 from flask_jwt_extended import create_access_token, decode_token
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.models import AuthSession, User
@@ -131,16 +131,22 @@ def find_user(method: str, identifier) -> User | None:
         method,
         identifier,
     )
+
+    if method == "email":
+        statement = select(User).where(
+            func.lower(User.email) == normalized_identifier
+        )
+        return db.session.scalar(statement)
+
     columns = {
-        "email": User.email,
         "contact_number": User.contact_number,
         "username": User.username,
     }
+
     statement = select(User).where(
         columns[method] == normalized_identifier
     )
     return db.session.scalar(statement)
-
 
 def login_user(payload: dict) -> tuple[User, str, datetime]:
     user = find_user(payload["method"], payload["identifier"])
@@ -201,7 +207,8 @@ def account_credentials_match(user: User | None, payload: dict) -> bool:
 
     return (
         payload["username"] == user.username
-        and payload["email"] == user.email
+        and str(payload["email"]).strip().lower()
+        == str(user.email).strip().lower()
         and contact_number == user.contact_number
         and user.check_password(payload["current_password"])
     )

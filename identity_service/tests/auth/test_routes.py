@@ -87,6 +87,7 @@ def test_login_accepts_each_unique_identifier(client, method):
     expected_expiry = datetime.now(timezone.utc) + timedelta(days=1)
     assert abs(expires_at - expected_expiry) < timedelta(seconds=5)
     assert body["data"]["user"] == {
+        "username": registration["username"],
         "full_name": registration["full_name"],
         "email": registration["email"],
         "contact_number": registration["contact_number"],
