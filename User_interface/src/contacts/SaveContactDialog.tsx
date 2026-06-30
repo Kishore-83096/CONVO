@@ -53,15 +53,19 @@ export function SaveContactDialog({
       saved_name: "",
     },
   });
-    useEffect(() => {
+
+  useEffect(() => {
     if (!contact) {
-        return;
+      reset({
+        saved_name: "",
+      });
+      return;
     }
 
     reset({
-        saved_name: contact.full_name,
+      saved_name: contact.full_name,
     });
-    }, [contact, reset]);
+  }, [contact, reset]);
 
   async function onSubmit(
     data: SaveContactFormValues,

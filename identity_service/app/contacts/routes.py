@@ -18,6 +18,7 @@ from app.contacts.services import (
     resolve_message_recipient,
     search_contact,
     serialize_contact_detail,
+    serialize_contact_with_current_delivery_policy,
     serialize_message_recipient,
     serialize_contact_summary,
     serialize_contact_with_delivery_policy,
@@ -116,7 +117,7 @@ def get_one(contact_id: int):
     return api_response(
         success=True,
         message="Contact retrieved.",
-        data=serialize_contact_detail(contact),
+        data=serialize_contact_with_current_delivery_policy(contact),
         status_code=200,
     )
 

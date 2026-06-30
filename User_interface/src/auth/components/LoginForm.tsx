@@ -8,6 +8,7 @@ import {
 import { useState } from "react";
 
 import { useAuth } from "@/auth/use-auth";
+import { userHomePath } from "@/auth/auth-routes";
 import {
   loginSchema,
   type LoginFormValues,
@@ -68,9 +69,9 @@ export function LoginForm() {
     setLoginError("");
 
     try {
-      await login(data);
+      const session = await login(data);
 
-      navigate("/app", {
+      navigate(userHomePath(session), {
         replace: true,
       });
     } catch (error) {
@@ -112,6 +113,28 @@ export function LoginForm() {
             Account created
             successfully. Please sign
             in.
+          </span>
+        </div>
+      )}
+
+      {location.state?.sessionNotice && (
+        <div
+          className="auth-success-banner"
+          role="status"
+          aria-live="polite"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+
+          <span>
+            {location.state.sessionNotice}
           </span>
         </div>
       )}

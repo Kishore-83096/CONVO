@@ -1,3 +1,5 @@
+import { ProfilePage as ProfileFeaturePage } from "@/profile/ProfilePage";
+
 export function ProfilePage() {
-  return <h1>Profile</h1>;
+  return <ProfileFeaturePage />;
 }

@@ -21,17 +21,17 @@ export interface ContactSummary {
 
   saved_name: string;
 
+  profile_picture: ContactAvatar | null;
+}
+
+export interface ContactDetail
+  extends ContactSummary {
   contact_number: number;
 
   username: string;
 
   full_name: string;
 
-  profile_picture: ContactAvatar | null;
-}
-
-export interface ContactDetail
-  extends ContactSummary {
   delivery_policy?: DeliveryPolicy;
 }
 

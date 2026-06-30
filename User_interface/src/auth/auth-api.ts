@@ -9,6 +9,8 @@ import type {
   LoginRequest,
   LoginResponse,
   RegisterRequest,
+  ResetPasswordRequest,
+  DeleteAccountRequest,
   IdentityUser,
 } from "./auth-types";
 
@@ -50,6 +52,34 @@ export const authApi = {
       {
         method: "POST",
         url: "/auth/logout",
+      },
+    );
+  },
+
+  /**
+   * Change the current user's password.
+   */
+  resetPassword(payload: ResetPasswordRequest) {
+    return request<ApiEnvelope<null>>(
+      identityClient,
+      {
+        method: "POST",
+        url: "/auth/reset-password",
+        data: payload,
+      },
+    );
+  },
+
+  /**
+   * Permanently delete the current account.
+   */
+  deleteAccount(payload: DeleteAccountRequest) {
+    return request<ApiEnvelope<null>>(
+      identityClient,
+      {
+        method: "DELETE",
+        url: "/auth/delete-account",
+        data: payload,
       },
     );
   },

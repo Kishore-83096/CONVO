@@ -10,9 +10,11 @@ import {
 
 import type {
   AuthSession,
+  DeleteAccountRequest,
   LoginRequest,
   RegisterRequest,
   RegisterResponse,
+  ResetPasswordRequest,
 } from "./auth-types";
 
 
@@ -68,14 +70,24 @@ class AuthService {
     try {
       await authApi.logout();
     } finally {
-      clearSession();
-
-      setAccessToken(null);
-
-      useAuthStore
-        .getState()
-        .clearSession();
+      await this.clearAuthenticatedState();
     }
+  }
+
+  async resetPassword(
+    request: ResetPasswordRequest,
+  ): Promise<void> {
+    await authApi.resetPassword(request);
+    await this.clearAuthenticatedState();
+  }
+
+  async deleteAccount(
+    request: DeleteAccountRequest,
+  ): Promise<void> {
+    await authApi.deleteAccount(request);
+    await this.clearAuthenticatedState({
+      clearAllLocalAppData: true,
+    });
   }
 
   restoreSession(): void {
@@ -91,6 +103,71 @@ class AuthService {
       .getState()
       .setSession(session);
   }
+
+  private async clearAuthenticatedState(
+    options: {
+      clearAllLocalAppData?: boolean;
+    } = {},
+  ): Promise<void> {
+    clearSession();
+
+    setAccessToken(null);
+
+    useAuthStore
+      .getState()
+      .clearSession();
+
+    if (options.clearAllLocalAppData) {
+      clearMynaLocalStorage();
+      await clearMynaIndexedDatabases().catch(() => undefined);
+    }
+  }
 }
 
 export const authService = new AuthService();
+
+function clearMynaLocalStorage(): void {
+  const keys = Array.from(
+    { length: localStorage.length },
+    (_, index) => localStorage.key(index),
+  ).filter((key): key is string => Boolean(key));
+
+  keys
+    .filter((key) => key.startsWith("myna."))
+    .forEach((key) => localStorage.removeItem(key));
+}
+
+async function clearMynaIndexedDatabases(): Promise<void> {
+  if (typeof indexedDB === "undefined") {
+    return;
+  }
+
+  const factory = indexedDB as IDBFactory & {
+    databases?: () => Promise<Array<{ name?: string }>>;
+  };
+
+  if (!factory.databases) {
+    return;
+  }
+
+  const databases = await factory.databases();
+
+  await Promise.all(
+    databases
+      .map((database) => database.name)
+      .filter((name): name is string =>
+        Boolean(name && name.toLowerCase().includes("myna")),
+      )
+      .map(deleteIndexedDatabase),
+  );
+}
+
+function deleteIndexedDatabase(name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name);
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+    request.onblocked = () => resolve();
+  });
+}

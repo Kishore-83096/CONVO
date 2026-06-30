@@ -31,7 +31,7 @@ class ContactsService {
 
   async add(
     request: AddContactRequest,
-  ): Promise<ContactSummary> {
+  ): Promise<ContactDetail> {
     const { data } =
       await contactsApi.add(request);
 
@@ -69,7 +69,7 @@ class ContactsService {
   async rename(
     contactId: number,
     request: RenameContactRequest,
-  ): Promise<ContactSummary> {
+  ): Promise<ContactDetail> {
     const { data } =
       await contactsApi.rename(
         contactId,
@@ -104,6 +104,21 @@ class ContactsService {
     return data;
   }
 
+  async unblock(
+    contactId: number,
+  ): Promise<ContactDetail> {
+    const { data } =
+      await contactsApi.unblock(contactId);
+
+    if (!data) {
+      throw new Error(
+        "Unblock contact response did not contain contact data.",
+      );
+    }
+
+    return data;
+  }
+
   async ghost(
     contactId: number,
     request: GhostContactRequest,
@@ -117,6 +132,21 @@ class ContactsService {
     if (!data) {
       throw new Error(
         "Ghost contact response did not contain contact data.",
+      );
+    }
+
+    return data;
+  }
+
+  async unghost(
+    contactId: number,
+  ): Promise<ContactDetail> {
+    const { data } =
+      await contactsApi.unghost(contactId);
+
+    if (!data) {
+      throw new Error(
+        "Unghost contact response did not contain contact data.",
       );
     }
 

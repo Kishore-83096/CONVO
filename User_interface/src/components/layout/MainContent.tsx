@@ -8,7 +8,7 @@ export function MainContent({
     children,
 }: MainContentProps) {
     return (
-        <main className="conversation">
+        <main className="main-body">
             {children}
         </main>
     );

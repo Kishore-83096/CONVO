@@ -17,6 +17,12 @@ export function useAuth() {
 
     logout: authService.logout.bind(authService),
 
+    resetPassword:
+      authService.resetPassword.bind(authService),
+
+    deleteAccount:
+      authService.deleteAccount.bind(authService),
+
     restoreSession:
       authService.restoreSession.bind(authService),
   };

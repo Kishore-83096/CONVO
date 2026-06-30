@@ -35,7 +35,7 @@ export const contactsApi = {
    * Save a new contact.
    */
   add(payload: AddContactRequest) {
-    return request<ApiEnvelope<ContactSummary>>(
+    return request<ApiEnvelope<ContactDetail>>(
       identityClient,
       {
         method: "POST",
@@ -78,7 +78,7 @@ export const contactsApi = {
     contactId: number,
     payload: RenameContactRequest,
   ) {
-    return request<ApiEnvelope<ContactSummary>>(
+    return request<ApiEnvelope<ContactDetail>>(
       identityClient,
       {
         method: "PATCH",
@@ -106,6 +106,22 @@ export const contactsApi = {
   },
 
   /**
+   * Explicitly unblock a contact.
+   */
+  unblock(contactId: number) {
+    return request<ApiEnvelope<ContactDetail>>(
+      identityClient,
+      {
+        method: "PATCH",
+        url: `/contacts/${contactId}/block`,
+        data: {
+          is_blocked: false,
+        },
+      },
+    );
+  },
+
+  /**
    * Ghost or unghost a contact.
    */
   ghost(
@@ -118,6 +134,22 @@ export const contactsApi = {
         method: "PATCH",
         url: `/contacts/${contactId}/ghost`,
         data: payload,
+      },
+    );
+  },
+
+  /**
+   * Explicitly unghost a contact.
+   */
+  unghost(contactId: number) {
+    return request<ApiEnvelope<ContactDetail>>(
+      identityClient,
+      {
+        method: "PATCH",
+        url: `/contacts/${contactId}/ghost`,
+        data: {
+          is_ghosted: false,
+        },
       },
     );
   },

@@ -133,6 +133,57 @@ def serialize_contact_delivery_policy(policy: ContactDeliveryPolicy) -> dict:
         "updated_at": _dt(policy.updated_at),
     }
 
+
+def _get_delivery_policy(
+    *,
+    owner_id: int,
+    target_user_id: int,
+) -> ContactDeliveryPolicy | None:
+    return db.session.scalar(
+        select(ContactDeliveryPolicy).where(
+            ContactDeliveryPolicy.owner_id == owner_id,
+            ContactDeliveryPolicy.target_user_id == target_user_id,
+        )
+    )
+
+
+def serialize_default_contact_delivery_policy(contact: Contact) -> dict:
+    return {
+        "owner_user_id": contact.owner_id,
+        "target_user_id": contact.contact_user_id,
+        "is_blocked": False,
+        "blocked_at": None,
+        "is_ghosted": False,
+        "ghost_until": None,
+        "ghost_permanent": False,
+        "ghost_duration_option": None,
+        "policy_version": 0,
+        "updated_at": None,
+    }
+
+
+def serialize_current_contact_delivery_policy(contact: Contact) -> dict:
+    policy = _get_delivery_policy(
+        owner_id=contact.owner_id,
+        target_user_id=contact.contact_user_id,
+    )
+
+    if policy is None:
+        return serialize_default_contact_delivery_policy(contact)
+
+    return serialize_contact_delivery_policy(policy)
+
+
+def serialize_contact_with_current_delivery_policy(
+    contact: Contact,
+) -> dict:
+    data = serialize_contact_detail(contact)
+    data["delivery_policy"] = serialize_current_contact_delivery_policy(
+        contact
+    )
+    return data
+
+
 def serialize_contact_with_delivery_policy(
     contact: Contact,
     policy: ContactDeliveryPolicy,

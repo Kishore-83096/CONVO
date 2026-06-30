@@ -34,6 +34,13 @@ export function createHttpClient(baseURL: string): AxiosInstance {
         config.headers.Authorization = `Bearer ${accessToken}`;
       }
 
+      if (
+        typeof FormData !== "undefined" &&
+        config.data instanceof FormData
+      ) {
+        config.headers.delete("Content-Type");
+      }
+
       return config;
     },
     (error) => Promise.reject(error),
@@ -42,6 +49,15 @@ export function createHttpClient(baseURL: string): AxiosInstance {
   client.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
+      if (!error.response) {
+        throw new ApiError(
+          "Unable to reach the server. Check that the backend is running and the frontend origin is allowed by CORS.",
+          0,
+          undefined,
+          error,
+        );
+      }
+
       const status = error.response?.status ?? 500;
 
       const payload = error.response?.data as

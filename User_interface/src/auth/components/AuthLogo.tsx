@@ -1,12 +1,13 @@
+import { BrandLogo } from "@/components/brand";
+
 export function AuthLogo() {
   return (
     <header className="auth-logo">
-      <div
-        className="auth-logo__badge"
-        aria-hidden="true"
-      >
-        M
-      </div>
+      <BrandLogo
+        className="auth-logo__brand"
+        iconClassName="auth-logo__badge"
+        showName={false}
+      />
 
       <h1 className="auth-logo__title">
         MYNA

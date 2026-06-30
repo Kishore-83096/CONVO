@@ -209,8 +209,23 @@ def test_contact_add_list_detail_rename_and_delete_workflow(
         f"/api/v1/contacts/{contact_id}",
         headers=contact_users["owner_headers"],
     )
+    detail_data = detail.get_json()["data"]
     assert detail.status_code == 200
-    assert detail.get_json()["data"] == added_data
+    default_policy = detail_data["delivery_policy"]
+
+    assert default_policy["owner_user_id"] > 0
+    assert default_policy["target_user_id"] > 0
+    assert default_policy["is_blocked"] is False
+    assert default_policy["blocked_at"] is None
+    assert default_policy["is_ghosted"] is False
+    assert default_policy["ghost_until"] is None
+    assert default_policy["ghost_permanent"] is False
+    assert default_policy["ghost_duration_option"] is None
+    assert default_policy["policy_version"] == 0
+    assert default_policy["updated_at"] is None
+    detail_data_without_policy = dict(detail_data)
+    detail_data_without_policy.pop("delivery_policy")
+    assert detail_data_without_policy == added_data
 
     renamed = client.patch(
         f"/api/v1/contacts/{contact_id}",
@@ -365,3 +380,33 @@ def test_contact_ghost_default_duration_and_unghost(
     assert unghost_policy["ghost_until"] is None
     assert unghost_policy["ghost_permanent"] is False
     assert unghost_policy["ghost_duration_option"] is None
+
+
+def test_contact_detail_returns_current_delivery_policy_after_block(
+    client,
+    contact_users,
+):
+    added = add_target_contact(client, contact_users)
+    contact_id = added.get_json()["data"]["id"]
+
+    blocked = client.patch(
+        f"/api/v1/contacts/{contact_id}/block",
+        headers=contact_users["owner_headers"],
+        json={
+            "is_blocked": True,
+        },
+    )
+    detail = client.get(
+        f"/api/v1/contacts/{contact_id}",
+        headers=contact_users["owner_headers"],
+    )
+
+    assert blocked.status_code == 200
+    assert detail.status_code == 200
+
+    policy = detail.get_json()["data"]["delivery_policy"]
+
+    assert policy["is_blocked"] is True
+    assert policy["blocked_at"] is not None
+    assert policy["is_ghosted"] is False
+    assert policy["policy_version"] >= 2

@@ -37,6 +37,22 @@ export interface RegisterResponse {
   contact_number: number;
 }
 
+export interface ResetPasswordRequest {
+    username: string;
+    email: string;
+    contact_number: string;
+    current_password: string;
+    new_password: string;
+    confirm_new_password: string;
+}
+
+export interface DeleteAccountRequest {
+    username: string;
+    email: string;
+    contact_number: string;
+    current_password: string;
+}
+
 export interface AuthSession {
     accessToken: string;
     tokenType: string;

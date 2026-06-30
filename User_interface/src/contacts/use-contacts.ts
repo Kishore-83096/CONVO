@@ -69,7 +69,15 @@ export function useContacts() {
       contactsService,
     ),
 
+    unblock: contactsService.unblock.bind(
+      contactsService,
+    ),
+
     ghost: contactsService.ghost.bind(
+      contactsService,
+    ),
+
+    unghost: contactsService.unghost.bind(
       contactsService,
     ),
 
