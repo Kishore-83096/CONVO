@@ -142,6 +142,16 @@ def serialize_contact_with_delivery_policy(
     return data
 
 
+def serialize_message_recipient(contact: Contact) -> dict:
+    user = contact.contact_user
+    return {
+        "contact_id": contact.id,
+        "contact_user_id": str(contact.contact_user_id),
+        "saved_name": contact.saved_name,
+        "contact_number": str(user.contact_number),
+    }
+
+
 def search_contact(user_id: int, payload: dict) -> tuple[User, bool]:
     current_user = get_active_user(user_id)
     found_user = find_user_by_contact_number(payload["contact_number"])
@@ -218,6 +228,16 @@ def get_contact(user_id: int, contact_id: int) -> Contact:
     if contact is None:
         raise ApiError("Contact was not found.", status_code=404)
     return contact
+
+
+def resolve_message_recipient(
+    user_id: int,
+    payload: dict,
+) -> Contact:
+    return get_contact(
+        user_id,
+        int(payload["contact_id"]),
+    )
 
 
 def rename_contact(

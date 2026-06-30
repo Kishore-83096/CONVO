@@ -51,6 +51,17 @@ class BlockContactSchema(Schema):
 
     is_blocked = fields.Boolean(required=True)
 
+
+class ResolveMessageRecipientSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    contact_id = fields.Integer(
+        required=True,
+        validate=validate.Range(min=1),
+    )
+
+
 class GhostContactSchema(Schema):
     class Meta:
         unknown = EXCLUDE
@@ -70,5 +81,4 @@ class GhostContactSchema(Schema):
             ]
         ),
     )
-
 

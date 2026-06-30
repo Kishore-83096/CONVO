@@ -119,9 +119,12 @@ def validate_identity_user_ids(
         getattr(
             settings,
             "IDENTITY_SERVICE_USER_VALIDATE_PATH",
-            "/users/validate/",
+            "auth/users/validate",
         )
     ).strip()
+    print("IDENTITY BASE URL:", base_url)
+    print("IDENTITY VALIDATE PATH:", path)
+    print("IDENTITY VALIDATE URL:", f"{base_url}/{path.lstrip('/')}")
 
     if not base_url:
         raise IdentityClientError(
@@ -156,6 +159,9 @@ def validate_identity_user_ids(
         with urlopen(request, timeout=5) as response:
             raw_response = response.read().decode("utf-8")
             status_code = response.status
+
+            print("IDENTITY STATUS:", status_code)
+            print("IDENTITY RESPONSE:", raw_response)
     except HTTPError as error:
         if error.code == 404:
             raise UnknownIdentityUsersError(normalized_user_ids) from error

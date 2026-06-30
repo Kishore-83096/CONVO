@@ -4,6 +4,7 @@ from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 from app.contacts.schemas import (
     AddContactSchema,
     BlockContactSchema,
+    ResolveMessageRecipientSchema,
     RenameContactSchema,
     SearchContactSchema,
     GhostContactSchema,
@@ -14,8 +15,10 @@ from app.contacts.services import (
     get_contact,
     list_contacts,
     rename_contact,
+    resolve_message_recipient,
     search_contact,
     serialize_contact_detail,
+    serialize_message_recipient,
     serialize_contact_summary,
     serialize_contact_with_delivery_policy,
     serialize_search_result,
@@ -33,6 +36,7 @@ search_schema = SearchContactSchema()
 add_schema = AddContactSchema()
 rename_schema = RenameContactSchema()
 block_schema = BlockContactSchema()
+resolve_message_recipient_schema = ResolveMessageRecipientSchema()
 ghost_schema = GhostContactSchema()
 
 @contacts_blueprint.before_request
@@ -90,6 +94,18 @@ def get_contact_list():
         success=True,
         message="Contact list retrieved.",
         data=[serialize_contact_summary(contact) for contact in contacts],
+        status_code=200,
+    )
+
+
+@contacts_blueprint.post("/resolve-message-recipient")
+def resolve_for_message():
+    payload = resolve_message_recipient_schema.load(json_request_body())
+    contact = resolve_message_recipient(current_user_id(), payload)
+    return api_response(
+        success=True,
+        message="Message recipient resolved.",
+        data=serialize_message_recipient(contact),
         status_code=200,
     )
 

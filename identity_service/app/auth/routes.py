@@ -6,6 +6,7 @@ from app.auth.schemas import (
     LoginSchema,
     RegisterSchema,
     ResetPasswordSchema,
+    ValidateUsersSchema
 )
 from app.auth.services import (
     delete_user_account,
@@ -14,6 +15,7 @@ from app.auth.services import (
     register_user,
     reset_user_password,
     user_details,
+    validate_user_ids,
 )
 from app.extensions import limiter
 from app.shared.exceptions import ApiError
@@ -25,7 +27,7 @@ register_schema = RegisterSchema()
 login_schema = LoginSchema()
 reset_password_schema = ResetPasswordSchema()
 delete_account_schema = DeleteAccountSchema()
-
+validate_users_schema = ValidateUsersSchema()
 
 def json_request_body() -> dict:
     payload = request.get_json(silent=True)
@@ -105,5 +107,25 @@ def logout():
     return api_response(
         success=True,
         message="User logged out.",
+        status_code=200,
+    )
+
+
+
+
+@auth_blueprint.post("/users/validate")
+def validate_users():
+    payload = validate_users_schema.load(
+        json_request_body()
+    )
+
+    result = validate_user_ids(
+        payload["user_ids"]
+    )
+
+    return api_response(
+        success=True,
+        message="User validation completed.",
+        data=result,
         status_code=200,
     )

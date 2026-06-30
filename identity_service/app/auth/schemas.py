@@ -156,3 +156,12 @@ class ResetPasswordSchema(AccountCredentialsSchema):
 
 class DeleteAccountSchema(AccountCredentialsSchema):
     pass
+
+
+
+
+class ValidateUsersSchema(Schema):
+    user_ids = fields.List(
+        fields.String(required=True),
+        required=True,
+    )

@@ -1,0 +1,60 @@
+:root {
+
+  /* Brand */
+
+  --color-brand: #0F8F7F;
+  --color-brand-hover: #0C786A;
+  --color-brand-light: #E7F8F5;
+
+  /* Background */
+
+  --color-bg: #F7F8FA;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F2F4F7;
+
+  /* Text */
+
+  --color-text-primary: #18202A;
+  --color-text-secondary: #667085;
+  --color-text-disabled: #98A2B3;
+
+  /* Borders */
+
+  --color-border: #D0D5DD;
+
+  /* Status */
+
+  --color-success: #12B76A;
+  --color-warning: #F79009;
+  --color-danger: #F04438;
+  --color-info: #2E90FA;
+
+  /* Radius */
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Shadow */
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.08);
+
+  --shadow-md:
+      0 6px 18px rgba(15,23,42,.08);
+
+  --shadow-lg:
+      0 12px 32px rgba(15,23,42,.12);
+
+  /* Layout */
+
+  --topbar-height: 64px;
+  --left-sidebar-width: 88px;
+  --right-sidebar-width: 320px;
+
+  /* Animation */
+
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+
+}

@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from secrets import randbelow
-
 from flask_jwt_extended import create_access_token, decode_token
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -269,3 +268,43 @@ def logout_session(jti: str) -> None:
         delete(AuthSession).where(AuthSession.user_id == user_id)
     )
     db.session.commit()
+
+
+
+
+
+def validate_user_ids(user_ids: list[str]) -> dict:
+    """
+    Internal API used by Messenger.
+
+    Returns:
+    {
+        "valid_user_ids": [...],
+        "unknown_user_ids": [...]
+    }
+    """
+
+    normalized_ids = [
+        str(user_id)
+        for user_id in user_ids
+    ]
+
+    existing_ids = {
+        str(user.id)
+        for user in User.query.filter(
+            User.id.in_(
+                [int(user_id) for user_id in normalized_ids]
+            )
+        ).all()
+    }
+
+    unknown_ids = [
+        user_id
+        for user_id in normalized_ids
+        if user_id not in existing_ids
+    ]
+
+    return {
+        "valid_user_ids": sorted(existing_ids),
+        "unknown_user_ids": unknown_ids,
+    }

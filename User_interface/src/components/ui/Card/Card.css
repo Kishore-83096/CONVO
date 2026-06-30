@@ -1,0 +1,33 @@
+.ui-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+
+  transition:
+    box-shadow var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.ui-card--bordered {
+  border: 1px solid var(--color-border);
+}
+
+.ui-card--elevated {
+  box-shadow: var(--shadow-md);
+}
+
+.ui-card--padding-none {
+  padding: 0;
+}
+
+.ui-card--padding-sm {
+  padding: 1rem;
+}
+
+.ui-card--padding-md {
+  padding: 1.5rem;
+}
+
+.ui-card--padding-lg {
+  padding: 2rem;
+}
