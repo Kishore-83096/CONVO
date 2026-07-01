@@ -10,7 +10,7 @@
     "build:production": "tsc -b && vite build --mode production",
     "lint": "eslint .",
     "preview": "vite preview --mode development --host 127.0.0.1 --port 5173 --strictPort",
-    "preview:production": "vite preview --mode production --host 127.0.0.1 --port 5173 --strictPort"
+    "preview:production": "npm run build:production && vite preview --mode production --host 127.0.0.1 --port 5173 --strictPort"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

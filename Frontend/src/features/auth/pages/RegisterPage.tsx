@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { Button } from "../../../shared/ui/Button";
 import { FormField } from "../../../shared/ui/FormField";
@@ -9,7 +9,7 @@ import { Input } from "../../../shared/ui/Input";
 import { PublicLayout } from "../../../shared/ui/PublicLayout";
 import { useRegisterUser } from "../hooks";
 import { registerSchema, type RegisterFormValues } from "../schemas";
-import type { RegisterFieldName, RegisterResponseData } from "../types";
+import type { RegisterFieldName } from "../types";
 
 const registerFieldNames: RegisterFieldName[] = [
   "full_name",
@@ -37,9 +37,8 @@ function isErrorMap(value: unknown): value is Record<string, unknown> {
 
 export function RegisterPage() {
   const [serverMessage, setServerMessage] = useState("");
-  const [registeredUser, setRegisteredUser] =
-    useState<RegisterResponseData | null>(null);
 
+  const navigate = useNavigate();
   const registerMutation = useRegisterUser();
 
   const {
@@ -60,18 +59,23 @@ export function RegisterPage() {
 
   async function onSubmit(values: RegisterFormValues) {
     setServerMessage("");
-    setRegisteredUser(null);
 
     const result = await registerMutation.mutateAsync(values);
 
     if (result.ok) {
-      setRegisteredUser(result.data);
-
       reset({
         full_name: "",
         username: "",
         password: "",
         confirm_password: "",
+      });
+
+      navigate("/login", {
+        replace: true,
+        state: {
+          registrationSuccess: true,
+          registeredUser: result.data,
+        },
       });
 
       return;
@@ -104,8 +108,9 @@ export function RegisterPage() {
           <h1>Create your account</h1>
 
           <p>
-            Register your Myna identity. The backend will generate your email
-            and unique 10-digit contact number after successful registration.
+            Register your Secure Chat identity. The backend will generate your
+            email and unique 10-digit contact number after successful
+            registration.
           </p>
 
           <form className="auth-form" onSubmit={handleSubmit(onSubmit)}>
@@ -179,39 +184,6 @@ export function RegisterPage() {
               {isBusy ? "Creating account..." : "Create account"}
             </Button>
           </form>
-
-          {registeredUser ? (
-            <div className="auth-success" role="status">
-              <strong>Account created successfully.</strong>
-
-              <p>
-                Save these generated login details. Registration does not log
-                you in automatically in this phase.
-              </p>
-
-              <dl className="auth-result-list">
-                <div>
-                  <dt>Full name</dt>
-                  <dd>{registeredUser.full_name}</dd>
-                </div>
-
-                <div>
-                  <dt>Username</dt>
-                  <dd>{registeredUser.username}</dd>
-                </div>
-
-                <div>
-                  <dt>Generated email</dt>
-                  <dd>{registeredUser.email}</dd>
-                </div>
-
-                <div>
-                  <dt>Generated contact number</dt>
-                  <dd>{registeredUser.contact_number}</dd>
-                </div>
-              </dl>
-            </div>
-          ) : null}
 
           <div className="hero-actions">
             <Link className="button secondary" to="/login">

@@ -10,13 +10,20 @@ import { Input } from "../../../shared/ui/Input";
 import { PublicLayout } from "../../../shared/ui/PublicLayout";
 import { useLoginUser } from "../hooks";
 import { loginSchema, type LoginFormValues } from "../schemas";
-import type { LoginFieldName, LoginMethod, LoginRequest } from "../types";
+import type {
+  LoginFieldName,
+  LoginMethod,
+  LoginRequest,
+  RegisterResponseData,
+} from "../types";
 
 type RouterState = {
   from?: {
     pathname?: string;
   };
   message?: string;
+  registrationSuccess?: boolean;
+  registeredUser?: RegisterResponseData;
 };
 
 const loginFieldNames: LoginFieldName[] = ["method", "identifier", "password"];
@@ -64,26 +71,29 @@ export function LoginPage() {
   const state = location.state as RouterState | null;
   const redirectedFrom = state?.from?.pathname;
   const routeMessage = state?.message;
+  const registeredUser = state?.registrationSuccess
+    ? state.registeredUser
+    : undefined;
   const redirectTarget = redirectedFrom ?? "/app";
   const {
-  register,
-  handleSubmit,
-  setError,
-  control,
-  formState: { errors, isSubmitting },
-} = useForm<LoginFormValues>({
+    register,
+    handleSubmit,
+    setError,
+    control,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
       method: "username",
-      identifier: "",
+      identifier: registeredUser?.username ?? "",
       password: "",
     },
   });
 
   const selectedMethod = useWatch({
-  control,
-  name: "method",
-});
+    control,
+    name: "method",
+  });
 
   async function onSubmit(values: LoginFormValues) {
     setServerMessage("");
@@ -151,6 +161,30 @@ export function LoginPage() {
           ) : null}
           {routeMessage ? <div className="notice">{routeMessage}</div> : null}
 
+          {registeredUser ? (
+            <div className="auth-success" role="status">
+              <strong>Account created successfully.</strong>
+              <p>Login with your generated details.</p>
+
+              <dl className="auth-result-list">
+                <div>
+                  <dt>Username</dt>
+                  <dd>{registeredUser.username}</dd>
+                </div>
+
+                <div>
+                  <dt>Generated email</dt>
+                  <dd>{registeredUser.email}</dd>
+                </div>
+
+                <div>
+                  <dt>Generated contact number</dt>
+                  <dd>{registeredUser.contact_number}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
+
           <form className="auth-form" onSubmit={handleSubmit(onSubmit)}>
             <FormField
               error={errors.method?.message}
@@ -174,7 +208,7 @@ export function LoginPage() {
                 selectedMethod === "username"
                   ? "Example: grace_hopper"
                   : selectedMethod === "email"
-                    ? "Example: grace_hopper@Myna.com"
+                    ? "Use your generated email."
                     : "Example: 7467449164"
               }
               htmlFor="identifier"
@@ -194,7 +228,7 @@ export function LoginPage() {
                   selectedMethod === "username"
                     ? "grace_hopper"
                     : selectedMethod === "email"
-                      ? "grace_hopper@Myna.com"
+                      ? "Generated email"
                       : "7467449164"
                 }
                 {...register("identifier")}

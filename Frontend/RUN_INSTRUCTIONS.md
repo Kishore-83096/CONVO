@@ -41,7 +41,7 @@ PRODUCTION RUN
 | Run production settings locally | npm run dev:production | Loads .env.production and serves http://127.0.0.1:5173 |
 | Build production | npm run build:production | Builds with .env.production |
 | Lint | npm run lint | Same lint command; lint does not use env mode |
-| Preview production build | npm run preview:production | Serves the existing dist folder on http://127.0.0.1:5173 |
+| Preview production build | npm run preview:production | Rebuilds with .env.production, then serves http://127.0.0.1:5173 |
 | Stop dev or preview server | Ctrl+C | Use in the running terminal |
 
 

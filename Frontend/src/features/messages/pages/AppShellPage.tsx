@@ -1,59 +1,47 @@
-import { Link } from "react-router-dom";
-import { MessengerWhoamiCard } from "../../messengerAuth/components/MessengerWhoamiCard";
+import { useState } from "react";
+
 import { useAuth } from "../../../app/providers/useAuth";
-import { LogoutButton } from "../../auth/components/LogoutButton";
+import { AppMainTabs, type AppTab } from "../components/AppMainTabs";
+import { AppSidebar } from "../components/AppSidebar";
+
+const ACTIVE_APP_TAB_STORAGE_KEY = "secure_chat_active_tab";
+
+function readSavedAppTab(): AppTab {
+  const savedTab = localStorage.getItem(ACTIVE_APP_TAB_STORAGE_KEY);
+
+  if (
+    savedTab === "home" ||
+    savedTab === "contacts" ||
+    savedTab === "profile" ||
+    savedTab === "account-settings"
+  ) {
+    return savedTab;
+  }
+
+  return "home";
+}
 
 export function AppShellPage() {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<AppTab>(readSavedAppTab);
+
+  function changeActiveTab(tab: AppTab) {
+    localStorage.setItem(ACTIVE_APP_TAB_STORAGE_KEY, tab);
+    setActiveTab(tab);
+  }
 
   return (
-    <main className="app-shell-page">
-      <section className="app-shell-card">
-        <div>
-          <p className="eyebrow">Authenticated area</p>
-          <h1>Myna App Shell</h1>
-          <p>
-            You are logged in. Messaging, contacts, E2EE device setup, and
-            realtime features will be added in later phases.
-          </p>
-        </div>
+    <div className="logged-in-shell">
+      <AppSidebar
+        activeTab={activeTab}
+        user={user}
+        onOpenHome={() => changeActiveTab("home")}
+        onOpenContacts={() => changeActiveTab("contacts")}
+        onOpenProfile={() => changeActiveTab("profile")}
+        onOpenAccountSettings={() => changeActiveTab("account-settings")}
+      />
 
-        {user ? (
-          <div className="session-card">
-            <h2>Current session</h2>
-
-            <dl className="auth-result-list">
-              <div>
-                <dt>Full name</dt>
-                <dd>{user.fullName}</dd>
-              </div>
-
-              <div>
-                <dt>Username</dt>
-                <dd>{user.username}</dd>
-              </div>
-
-              <div>
-                <dt>Email</dt>
-                <dd>{user.email}</dd>
-              </div>
-
-              <div>
-                <dt>Contact number</dt>
-                <dd>{user.contactNumber}</dd>
-              </div>
-            </dl>
-          </div>
-        ) : null}
-        <MessengerWhoamiCard />
-        <div className="hero-actions">
-          <Link className="button secondary" to="/settings">
-            Open settings
-          </Link>
-
-          <LogoutButton />
-        </div>
-      </section>
-    </main>
+      <AppMainTabs activeTab={activeTab} onChangeTab={changeActiveTab} />
+    </div>
   );
 }
