@@ -104,6 +104,7 @@ class RoomListAPITests(APITestCase):
             {
                 "sub": user_id,
                 "type": "access",
+                "iss": settings.JWT_ISSUER,
                 "jti": str(uuid.uuid4()),
                 "iat": now,
                 "nbf": now,

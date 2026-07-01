@@ -101,6 +101,10 @@ class Config:
     JWT_SECRET_KEY = os.getenv(
         "JWT_SECRET_KEY"
     )
+    JWT_ISSUER = os.getenv(
+        "JWT_ISSUER",
+        "myna-identity-service",
+    ).strip()
 
     SQLALCHEMY_DATABASE_URI = (
         normalize_database_url(

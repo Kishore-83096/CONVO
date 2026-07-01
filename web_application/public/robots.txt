@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://convo-5wqy.onrender.com/sitemap.xml

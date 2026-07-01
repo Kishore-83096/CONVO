@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from flask_jwt_extended import decode_token
 
 from app.auth.models import AuthSession, User
 from app.extensions import db
@@ -83,6 +84,11 @@ def test_login_accepts_each_unique_identifier(client, method):
     assert response.status_code == 200
     assert body["message"] == "User logged in."
     assert body["data"]["access_token"]
+    decoded_token = decode_token(body["data"]["access_token"])
+    assert decoded_token["iss"] == "myna-identity-service"
+    assert decoded_token["sub"]
+    assert decoded_token["type"] == "access"
+    assert decoded_token["jti"]
     expires_at = datetime.fromisoformat(body["data"]["expires_at"])
     expected_expiry = datetime.now(timezone.utc) + timedelta(days=1)
     assert abs(expires_at - expected_expiry) < timedelta(seconds=5)

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from secrets import randbelow
+from flask import current_app
 from flask_jwt_extended import create_access_token, decode_token
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -160,7 +161,12 @@ def login_user(payload: dict) -> tuple[User, str, datetime]:
             status_code=401,
         )
 
-    access_token = create_access_token(identity=str(user.id))
+    access_token = create_access_token(
+        identity=str(user.id),
+        additional_claims={
+            "iss": current_app.config["JWT_ISSUER"],
+        },
+    )
     decoded_token = decode_token(access_token)
     expires_at = datetime.fromtimestamp(
         decoded_token["exp"],
