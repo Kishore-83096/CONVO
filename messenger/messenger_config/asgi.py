@@ -10,6 +10,8 @@ that touches RealtimeTicket / Device / other Django models.
 
 import os
 import asyncio
+import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from channels.routing import ProtocolTypeRouter, URLRouter
@@ -67,6 +69,71 @@ class DefaultExecutorCap:
         await self.app(scope, receive, send)
 
 
+class BenchmarkHttpTimingLog:
+    """
+    Benchmark-only ASGI timing log.
+
+    UvicornWorker access logs do not expose the benchmark request headers or
+    request duration in the format needed by the local benchmark analyzer. This
+    wrapper is disabled unless MYNA_BENCHMARK_ASGI_ACCESS_LOG=1.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self.enabled = (
+            os.getenv("MYNA_BENCHMARK_ASGI_ACCESS_LOG", "")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self.log_file = os.getenv(
+            "MYNA_BENCHMARK_ASGI_ACCESS_LOG_FILE",
+            os.getenv(
+                "GUNICORN_ACCESS_LOG_FILE",
+                "/tmp/myna_benchmark_gunicorn_access.log",
+            ),
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if not self.enabled or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = time.perf_counter()
+        status_code = 0
+
+        async def timing_send(message):
+            nonlocal status_code
+            if message.get("type") == "http.response.start":
+                status_code = int(message.get("status") or 0)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, timing_send)
+        finally:
+            duration_us = int((time.perf_counter() - started) * 1_000_000)
+            headers = {
+                key.decode("latin1").lower(): value.decode("latin1")
+                for key, value in scope.get("headers", [])
+            }
+            path = scope.get("path", "")
+            method = scope.get("method", "")
+            line = (
+                f"{datetime.now(timezone.utc).isoformat()} "
+                f"pid={os.getpid()} "
+                f"status={status_code} "
+                f"duration_us={duration_us} "
+                f'method="{method}" '
+                f'path="{path}" '
+                f'run="{headers.get("x-myna-benchmark-run-id", "")}" '
+                f'req="{headers.get("x-myna-benchmark-request-id", "")}" '
+                f'phase="{headers.get("x-myna-benchmark-phase", "")}" '
+                f'concurrency="{headers.get("x-myna-benchmark-concurrency", "")}"'
+            )
+            with open(self.log_file, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+
+
 router = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
@@ -77,6 +144,6 @@ router = ProtocolTypeRouter(
 )
 
 application = DefaultExecutorCap(
-    router,
+    BenchmarkHttpTimingLog(router),
     _configured_asgi_threads(),
 )

@@ -64,6 +64,7 @@ htmlcov/
 .cache/
 test-results/
 reports/
+/benchmark/myna_api_test_reports/
 /files/myna_api_test_reports/
 /benchmark/*.env
 !benchmark/*.env.example

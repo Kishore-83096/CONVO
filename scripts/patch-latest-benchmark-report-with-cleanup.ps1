@@ -20,6 +20,7 @@ if (-not (Test-Path $CleanupStatusPath)) {
 $cleanupStatus = Get-Content -Raw $CleanupStatusPath | ConvertFrom-Json
 
 $latestJson = Get-ChildItem $reportDir -Filter "*.json" -File |
+    Where-Object { $_.Name -notlike "*cleanup*status*" } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 
@@ -59,19 +60,20 @@ if ($null -ne $latestMd) {
     $messageRemovedText = if ($cleanupStatus.message_data_removed -eq $true) { "True" } else { "False" }
     $finalCleanupText = if ($finalCleanupSuccess -eq $true) { "True" } else { "False" }
 
-    $section = @"
-
-## Host-Side Messenger Cleanup
-
-```json
-$(($cleanupStatus | ConvertTo-Json -Depth 20))
-```
-
-**Messenger messages cleaned:** ``$messageRemovedText``  
-**Host-side Messenger cleanup success:** ``$statusText``  
-**Final cleanup success:** ``$finalCleanupText``  
-
-"@
+    $sectionLines = @(
+        "",
+        "## Host-Side Messenger Cleanup",
+        "",
+        '```json',
+        ($cleanupStatus | ConvertTo-Json -Depth 20),
+        '```',
+        "",
+        ('**Messenger messages cleaned:** `{0}`  ' -f $messageRemovedText),
+        ('**Host-side Messenger cleanup success:** `{0}`  ' -f $statusText),
+        ('**Final cleanup success:** `{0}`  ' -f $finalCleanupText),
+        ""
+    )
+    $section = $sectionLines -join [Environment]::NewLine
 
     if ($md -match "## Host-Side Messenger Cleanup") {
         $md = $md -replace "(?s)## Host-Side Messenger Cleanup.*$", $section
@@ -79,8 +81,9 @@ $(($cleanupStatus | ConvertTo-Json -Depth 20))
         $md = $md.TrimEnd() + "`r`n" + $section
     }
 
-    $md = $md -replace "\*\*Cleanup success:\*\* `False`", "**Cleanup success:** ``$finalCleanupText``"
-    $md = $md -replace "\*\*Cleanup success:\*\* `True`", "**Cleanup success:** ``$finalCleanupText``"
+    $cleanupReplacement = '**Cleanup success:** `' + $finalCleanupText + '`'
+    $md = $md -replace '\*\*Cleanup success:\*\* `False`', $cleanupReplacement
+    $md = $md -replace '\*\*Cleanup success:\*\* `True`', $cleanupReplacement
 
     $md | Set-Content -Encoding UTF8 $latestMd.FullName
 }

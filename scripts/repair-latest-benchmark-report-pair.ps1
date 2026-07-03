@@ -60,9 +60,9 @@ if ($cleanupStatusObj) {
 $cleanupBlockLines = @(
     "## Host-Side Messenger Cleanup",
     "",
-    "````json",
+    '```json',
     $cleanupJson,
-    "````",
+    '```',
     "",
     ('**Messenger messages cleaned:** `{0}`  ' -f $msgCleanupText),
     ('**Messages created by benchmark removed:** `{0}`  ' -f $msgCleanupText),
@@ -113,9 +113,9 @@ if (Test-Path $mdPath) {
         "",
         "## Overall Summary",
         "",
-        "````json",
+        '```json',
         $summaryJson,
-        "````",
+        '```',
         "",
         $cleanupBlock
     )

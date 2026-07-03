@@ -148,6 +148,12 @@ CONFIG: dict[str, Any] = {
     "SETUP_PAIR_CONCURRENCY": int(os.getenv("MYNA_SETUP_PAIR_CONCURRENCY", "1")),
     "SETUP_PAIR_DELAY_SECONDS": float(os.getenv("MYNA_SETUP_PAIR_DELAY_SECONDS", "0")),
     "BENCHMARK_COOLDOWN_SECONDS": float(os.getenv("MYNA_BENCHMARK_COOLDOWN_SECONDS", "1")),
+    "HTTP_MAX_CONNECTIONS": int(os.getenv("MYNA_HTTP_MAX_CONNECTIONS", "300")),
+    "HTTP_MAX_KEEPALIVE_CONNECTIONS": int(os.getenv("MYNA_HTTP_MAX_KEEPALIVE_CONNECTIONS", "300")),
+    "HTTP_KEEPALIVE_EXPIRY_SECONDS": float(os.getenv("MYNA_HTTP_KEEPALIVE_EXPIRY_SECONDS", "60")),
+    "HTTP_POOL_TIMEOUT_SECONDS": float(os.getenv("MYNA_HTTP_POOL_TIMEOUT_SECONDS", "10")),
+    "CONNECTION_WARMUP_ENABLED": os.getenv("MYNA_CONNECTION_WARMUP_ENABLED", "true").strip().lower() == "true",
+    "CONNECTION_WARMUP_CONCURRENCY": int(os.getenv("MYNA_CONNECTION_WARMUP_CONCURRENCY", "100")),
     "STOP_ON_FIRST_FAILED_LEVEL": os.getenv("MYNA_STOP_ON_FIRST_FAILED_LEVEL", "false").strip().lower() == "true",
     "DOCKER_STATS_ENABLED": os.getenv("MYNA_DOCKER_STATS_ENABLED", "true" if SERVICE_URL_MODE == "docker" else "false").strip().lower() == "true",
     "DOCKER_STATS_INTERVAL_SECONDS": float(os.getenv("MYNA_DOCKER_STATS_INTERVAL_SECONDS", "1")),
@@ -1076,6 +1082,9 @@ class SentMessageRecord:
     response_body: Any = None
     latency_ms: float | None = None
     error: str | None = None
+    benchmark_request_id: str | None = None
+    benchmark_phase: str | None = None
+    benchmark_concurrency_header: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -1525,6 +1534,11 @@ async def send_one_message(client: httpx.AsyncClient, *, record: SentMessageReco
         url = api_url(CONFIG["MESSENGER_BASE_URL"], "/api/v1/messages/direct/")
         headers = dict(HTTP_HEADERS)
         headers["Authorization"] = f"Bearer {record.sender_token}"
+        if record.benchmark_request_id:
+            headers["X-Myna-Benchmark-Run-Id"] = TEST_RUN_ID
+            headers["X-Myna-Benchmark-Request-Id"] = record.benchmark_request_id
+            headers["X-Myna-Benchmark-Phase"] = record.benchmark_phase or CURRENT_PHASE
+            headers["X-Myna-Benchmark-Concurrency"] = str(record.benchmark_concurrency_header or "")
         start = time.perf_counter()
         try:
             response = await client.post(url, json=record.payload, headers=headers)
@@ -1541,6 +1555,66 @@ async def send_one_message(client: httpx.AsyncClient, *, record: SentMessageReco
 async def send_concurrently(client: httpx.AsyncClient, *, records: list[SentMessageRecord], concurrency: int) -> None:
     semaphore = asyncio.Semaphore(max(1, concurrency))
     await asyncio.gather(*(send_one_message(client, record=record, semaphore=semaphore) for record in records))
+
+
+def assign_benchmark_headers(records: list[SentMessageRecord], *, concurrency: int, phase: str) -> None:
+    for ordinal, record in enumerate(records, start=1):
+        record.benchmark_phase = phase
+        record.benchmark_concurrency_header = concurrency
+        record.benchmark_request_id = (
+            f"{TEST_RUN_ID}-c{concurrency}-p{record.pair_index}-s{record.sequence}-r{ordinal}"
+        )
+
+
+async def run_connection_warmup(
+    client: httpx.AsyncClient,
+    *,
+    pairs: list[PairContext],
+    pairs_by_index: dict[int, PairContext],
+    sequence_start: int,
+    max_level: int,
+) -> tuple[int, dict[str, Any]]:
+    if not CONFIG["CONNECTION_WARMUP_ENABLED"]:
+        return sequence_start, {"enabled": False}
+
+    concurrency = max(1, int(CONFIG["CONNECTION_WARMUP_CONCURRENCY"] or max_level))
+    concurrency = min(concurrency, max(1, len(pairs)))
+    phase = f"connection_warmup_{concurrency}"
+    records: list[SentMessageRecord] = []
+    sequence = sequence_start
+    for pair in pairs[:concurrency]:
+        sequence += 1
+        records.append(
+            build_send_payload_for_pair(
+                pair=pair,
+                sequence=sequence,
+                benchmark_concurrency=concurrency,
+                force_contact_id=not bool(pair.room_id),
+            )
+        )
+
+    assign_benchmark_headers(records, concurrency=concurrency, phase=phase)
+    set_api_phase(phase, concurrency)
+    log_progress(
+        f"Connection warmup enabled: sending {len(records)} unmeasured messages at concurrency={concurrency}..."
+    )
+    started = time.perf_counter()
+    await send_concurrently(client, records=records, concurrency=concurrency)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    apply_room_ids_to_pairs(records, pairs_by_index)
+    summary = summarize_records(records, concurrency="connection_warmup")
+    summary["enabled"] = True
+    summary["measured_in_benchmark_summary"] = False
+    summary["target_concurrency"] = concurrency
+    summary["total_send_elapsed_ms"] = round(elapsed_ms, 2)
+    summary["messages_per_second"] = round(len(records) / max(elapsed_ms / 1000, 0.001), 2)
+    log_progress(
+        f"Connection warmup done: success={summary['success_count']}, failure={summary['failure_count']}, "
+        f"cooldown={CONFIG['BENCHMARK_COOLDOWN_SECONDS']}s"
+    )
+    if float(CONFIG["BENCHMARK_COOLDOWN_SECONDS"]) > 0:
+        await asyncio.sleep(float(CONFIG["BENCHMARK_COOLDOWN_SECONDS"]))
+    return sequence, summary
 
 
 def apply_room_ids_to_pairs(records: list[SentMessageRecord], pairs_by_index: dict[int, PairContext]) -> None:
@@ -1592,6 +1666,24 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
                 "body": record.response_body,
             }
             for record in failed_records[:20]
+        ],
+        "request_records": [
+            {
+                "sequence": record.sequence,
+                "pair_index": record.pair_index,
+                "client_message_id": record.client_message_id,
+                "benchmark_request_id": record.benchmark_request_id,
+                "benchmark_phase": record.benchmark_phase,
+                "benchmark_concurrency": record.benchmark_concurrency_header,
+                "latency_ms": round(record.latency_ms, 2) if record.latency_ms is not None else None,
+                "status": record.response_status,
+                "ok": record.ok,
+                "server_timing_ms": record.server_timing_ms,
+                "message_id": record.message_id,
+                "room_id": record.room_id,
+                "error": record.error,
+            }
+            for record in records
         ],
     }
 
@@ -2123,9 +2215,19 @@ async def run() -> int:
     pairs: list[PairContext] = []
     all_records: list[SentMessageRecord] = []
     docker_stats_sampler = DockerStatsSampler()
-    timeout = httpx.Timeout(float(CONFIG["REQUEST_TIMEOUT_SECONDS"]))
+    http_limits = httpx.Limits(
+        max_connections=int(CONFIG["HTTP_MAX_CONNECTIONS"]),
+        max_keepalive_connections=int(CONFIG["HTTP_MAX_KEEPALIVE_CONNECTIONS"]),
+        keepalive_expiry=float(CONFIG["HTTP_KEEPALIVE_EXPIRY_SECONDS"]),
+    )
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=float(CONFIG["REQUEST_TIMEOUT_SECONDS"]),
+        write=10.0,
+        pool=float(CONFIG["HTTP_POOL_TIMEOUT_SECONDS"]),
+    )
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=timeout, limits=http_limits, follow_redirects=False) as client:
         try:
             report["preflight"] = await preflight_service_urls(client)
             await docker_stats_sampler.start("setup_pairs")
@@ -2170,6 +2272,17 @@ async def run() -> int:
                 if warmup_summary["failure_count"] > 0:
                     raise RuntimeError("Warmup failed; direct rooms were not created for all pairs.")
 
+            sequence, connection_warmup_summary = await run_connection_warmup(
+                client,
+                pairs=pairs,
+                pairs_by_index=pairs_by_index,
+                sequence_start=sequence,
+                max_level=max(levels),
+            )
+            report["connection_warmup"] = connection_warmup_summary
+            if connection_warmup_summary.get("failure_count", 0) > 0:
+                raise RuntimeError("Connection warmup failed; measured benchmark was not started.")
+
             per_level: list[dict[str, Any]] = []
             for level in levels:
                 selected_pairs = pairs[:level]
@@ -2183,6 +2296,11 @@ async def run() -> int:
                         force_contact_id=not bool(pair.room_id),
                     ))
                 set_api_phase(f"send_concurrency_{level}", level)
+                assign_benchmark_headers(
+                    level_records,
+                    concurrency=level,
+                    phase=f"send_concurrency_{level}",
+                )
                 log_progress(f"Level concurrency={level}: sending {len(level_records)} messages from {len(selected_pairs)} different pairs...")
                 level_phase = f"concurrency_{level}"
                 send_started = time.perf_counter()

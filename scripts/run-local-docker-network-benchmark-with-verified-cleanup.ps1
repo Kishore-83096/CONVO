@@ -1,6 +1,8 @@
 ﻿param(
     [string]$Root = "D:\VENV\PARROT-V2",
-    [string]$RunnerEnvFile = "messenger\.env.benchmark.runner.docker-network.local"
+    [string]$RunnerEnvFile = "messenger\.env.benchmark.runner.docker-network.local",
+    [string]$BenchmarkMySqlRootPassword = "benchmark_root_password",
+    [string]$BenchmarkMySqlPassword = "myna_benchmark_password"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +12,7 @@ Set-Location $Root
 $reportDir = Join-Path $Root "benchmark\myna_api_test_reports"
 $mysqlContainer = "mysql-benchmark-local"
 $messengerContainer = "messenger-service-local"
-$rootPassword = "myna_root_password"
+$rootPassword = $BenchmarkMySqlRootPassword
 $messengerDb = "myna_messenger_benchmark"
 
 if (-not (Test-Path $reportDir)) {
@@ -64,6 +66,8 @@ try {
     $cleanupSql = @"
 DROP DATABASE IF EXISTS myna_messenger_benchmark;
 CREATE DATABASE myna_messenger_benchmark CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'myna_benchmark'@'%' IDENTIFIED BY '$BenchmarkMySqlPassword';
+ALTER USER 'myna_benchmark'@'%' IDENTIFIED BY '$BenchmarkMySqlPassword';
 GRANT ALL PRIVILEGES ON myna_messenger_benchmark.* TO 'myna_benchmark'@'%';
 FLUSH PRIVILEGES;
 SHOW DATABASES LIKE 'myna_messenger_benchmark';
@@ -142,19 +146,20 @@ $mdCleanupText = if ($finalCleanupSuccess) { "True" } else { "False" }
 $msgCleanupText = if ($cleanupSuccess) { "True" } else { "False" }
 $jsonForMd = $cleanupStatusObj | ConvertTo-Json -Depth 20
 
-$mdSection = @"
-
-## Host-Side Messenger Cleanup
-
-```json
-$jsonForMd
-```
-
-**Messenger messages cleaned:** ``$msgCleanupText``  
-**Messages created by benchmark removed:** ``$msgCleanupText``  
-**Final cleanup success:** ``$mdCleanupText``  
-
-"@
+$mdSectionLines = @(
+    "",
+    "## Host-Side Messenger Cleanup",
+    "",
+    '```json',
+    $jsonForMd,
+    '```',
+    "",
+    ('**Messenger messages cleaned:** `{0}`  ' -f $msgCleanupText),
+    ('**Messages created by benchmark removed:** `{0}`  ' -f $msgCleanupText),
+    ('**Final cleanup success:** `{0}`  ' -f $mdCleanupText),
+    ""
+)
+$mdSection = $mdSectionLines -join [Environment]::NewLine
 
 if (Test-Path $latestMdPath) {
     $md = Get-Content -Raw $latestMdPath
@@ -170,25 +175,26 @@ if (Test-Path $latestMdPath) {
 
     $md | Set-Content -Encoding UTF8 $latestMdPath
 } else {
-    $md = @"
-# Myna Distributed-Pairs Latency Benchmark Report
-
-**Result:** ``$($jsonObj.passed)``  
-**Run ID:** ``$($jsonObj.run_id)``  
-**Service URL mode:** ``$($jsonObj.service_url_mode)``  
-**Identity base URL:** ``$($jsonObj.identity_base_url)``  
-**Messenger base URL:** ``$($jsonObj.messenger_base_url)``  
-**Traffic mode:** ``$($jsonObj.traffic_mode)``  
-**Cleanup success:** ``$mdCleanupText``  
-
-## Benchmark Summary
-
-```json
-$($jsonObj.summary | ConvertTo-Json -Depth 30)
-```
-
-$mdSection
-"@
+    $mdLines = @(
+        "# Myna Distributed-Pairs Latency Benchmark Report",
+        "",
+        ('**Result:** `{0}`  ' -f $jsonObj.passed),
+        ('**Run ID:** `{0}`  ' -f $jsonObj.run_id),
+        ('**Service URL mode:** `{0}`  ' -f $jsonObj.service_url_mode),
+        ('**Identity base URL:** `{0}`  ' -f $jsonObj.identity_base_url),
+        ('**Messenger base URL:** `{0}`  ' -f $jsonObj.messenger_base_url),
+        ('**Traffic mode:** `{0}`  ' -f $jsonObj.traffic_mode),
+        ('**Cleanup success:** `{0}`  ' -f $mdCleanupText),
+        "",
+        "## Benchmark Summary",
+        "",
+        '```json',
+        ($jsonObj.summary | ConvertTo-Json -Depth 30),
+        '```',
+        "",
+        $mdSection
+    )
+    $md = $mdLines -join [Environment]::NewLine
 
     $md | Set-Content -Encoding UTF8 $latestMdPath
 }

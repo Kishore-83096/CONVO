@@ -39,6 +39,24 @@ messenger/api_tests/full_api_flow/myna_distributed_pairs_latency_benchmark_test.
 
 Reports are written under `files/myna_api_test_reports` by default and are ignored by Git.
 
+## Accurate Timing Benchmark
+
+Use this wrapper when you want client latency, Gunicorn request duration, outside-view gap, existing Messenger server timing, realtime enqueue timing, and host-side Docker stats in one report:
+
+```powershell
+.\scripts\run-local-docker-network-benchmark-accurate-timing.ps1
+```
+
+It starts the local Docker-network benchmark services with a benchmark-only Gunicorn access log, runs the distributed-pairs benchmark, collects Docker stats from host PowerShell, copies the Gunicorn log to the report directory, and patches the latest JSON report with a top-level `request_gap_analysis` section. It also writes a companion `<report-stem>_request_gap_analysis.md` summary.
+
+The accurate runner prints these paths at the end:
+
+- JSON benchmark report
+- Patched JSON benchmark report
+- Gunicorn access log
+- Host Docker stats CSV
+- Markdown request-gap analysis report
+
 ## Env Files
 
 | File | Purpose |

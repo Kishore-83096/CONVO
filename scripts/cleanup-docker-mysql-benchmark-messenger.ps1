@@ -1,13 +1,15 @@
 ﻿param(
     [string]$Root = "D:\VENV\PARROT-V2",
-    [string]$StatusOutputPath = ""
+    [string]$StatusOutputPath = "",
+    [string]$BenchmarkMySqlRootPassword = "benchmark_root_password",
+    [string]$BenchmarkMySqlPassword = "myna_benchmark_password"
 )
 
 $ErrorActionPreference = "Stop"
 
 $mysqlContainer = "mysql-benchmark-local"
 $messengerContainer = "messenger-service-local"
-$rootPassword = "myna_root_password"
+$rootPassword = $BenchmarkMySqlRootPassword
 $messengerDb = "myna_messenger_benchmark"
 $benchmarkUser = "myna_benchmark"
 
@@ -57,6 +59,8 @@ try {
     $cleanupSql = @"
 DROP DATABASE IF EXISTS myna_messenger_benchmark;
 CREATE DATABASE myna_messenger_benchmark CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'myna_benchmark'@'%' IDENTIFIED BY '$BenchmarkMySqlPassword';
+ALTER USER 'myna_benchmark'@'%' IDENTIFIED BY '$BenchmarkMySqlPassword';
 GRANT ALL PRIVILEGES ON myna_messenger_benchmark.* TO 'myna_benchmark'@'%';
 FLUSH PRIVILEGES;
 SHOW DATABASES LIKE 'myna_messenger_benchmark';

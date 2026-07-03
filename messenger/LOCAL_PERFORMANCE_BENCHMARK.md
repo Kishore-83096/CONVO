@@ -69,7 +69,7 @@ MESSENGER_SERVICE_BASE_URL=http://messenger-service-local:8000
 REDIS_URL=redis://redis:6379/0
 MYNA_PROFILE_DIRECT_SEND=true
 WEB_CONCURRENCY=5
-GUNICORN_BACKLOG=2048
+GUNICORN_BACKLOG=4096
 GUNICORN_TIMEOUT=60
 GUNICORN_GRACEFUL_TIMEOUT=30
 GUNICORN_KEEP_ALIVE=5
@@ -90,7 +90,7 @@ For benchmark Docker mode, start the service with your private local env file
 plus benchmark-safe overrides:
 
 ```powershell
-docker run --rm --name messenger-service-local --network parrot-local -p 8000:8000 --add-host=host.docker.internal:host-gateway --env-file .env.local -e APP_ENV=local -e DJANGO_DEBUG=False -e LOG_LEVEL=INFO -e DB_CONN_MAX_AGE=10 -e ASGI_THREADS=8 -e MYNA_PROFILE_DIRECT_SEND=true -e WEB_CONCURRENCY=5 -e GUNICORN_BACKLOG=2048 -e GUNICORN_TIMEOUT=60 -e GUNICORN_GRACEFUL_TIMEOUT=30 -e GUNICORN_KEEP_ALIVE=5 -e GUNICORN_ACCESS_LOG=0 -e IDENTITY_SERVICE_BASE_URL=http://identity-service-local:5000/api/v1 -e MESSENGER_SERVICE_BASE_URL=http://messenger-service-local:8000 -e REDIS_URL=redis://redis:6379/0 messenger-service:latest
+docker run --rm --name messenger-service-local --network parrot-local -p 8000:8000 --add-host=host.docker.internal:host-gateway --env-file .env.local -e APP_ENV=local -e DJANGO_DEBUG=False -e LOG_LEVEL=INFO -e DB_CONN_MAX_AGE=10 -e ASGI_THREADS=8 -e MYNA_PROFILE_DIRECT_SEND=true -e WEB_CONCURRENCY=5 -e GUNICORN_BACKLOG=4096 -e GUNICORN_TIMEOUT=60 -e GUNICORN_GRACEFUL_TIMEOUT=30 -e GUNICORN_KEEP_ALIVE=5 -e GUNICORN_ACCESS_LOG=0 -e IDENTITY_SERVICE_BASE_URL=http://identity-service-local:5000/api/v1 -e MESSENGER_SERVICE_BASE_URL=http://messenger-service-local:8000 -e REDIS_URL=redis://redis:6379/0 messenger-service:latest
 ```
 
 Health check from the host:

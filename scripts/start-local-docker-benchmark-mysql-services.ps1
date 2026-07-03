@@ -1,5 +1,8 @@
 ﻿param(
-    [string]$Root = "D:\VENV\PARROT-V2"
+    [string]$Root = "D:\VENV\PARROT-V2",
+    [string]$BenchmarkMySqlRootPassword = "benchmark_root_password",
+    [string]$BenchmarkMySqlUser = "myna_benchmark",
+    [string]$BenchmarkMySqlPassword = "myna_benchmark_password"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +19,11 @@ $messengerImage = "messenger-service-local:dev"
 
 $identityEnv = "identity_service\.env.benchmark.mysql-docker.local"
 $messengerEnv = "messenger\.env.benchmark.mysql-docker.local"
+$rootPassword = $BenchmarkMySqlRootPassword
+$benchmarkUser = $BenchmarkMySqlUser
+$benchmarkPassword = $BenchmarkMySqlPassword
+$identityDb = "myna_identity_benchmark"
+$messengerDb = "myna_messenger_benchmark"
 
 function Assert-LastCommandOk {
     param([string]$StepName)
@@ -70,6 +78,35 @@ function Wait-MySqlReady {
     throw "MySQL did not become ready."
 }
 
+function Repair-BenchmarkMySqlGrants {
+    param(
+        [string]$ContainerName,
+        [string]$RootPassword,
+        [string]$BenchmarkUser,
+        [string]$BenchmarkPassword,
+        [string]$IdentityDb,
+        [string]$MessengerDb
+    )
+
+    Write-Host "Repairing benchmark MySQL user grants..." -ForegroundColor Cyan
+
+    $grantSql = @"
+CREATE DATABASE IF NOT EXISTS $IdentityDb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS $MessengerDb CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$BenchmarkUser'@'%' IDENTIFIED BY '$BenchmarkPassword';
+ALTER USER '$BenchmarkUser'@'%' IDENTIFIED BY '$BenchmarkPassword';
+GRANT ALL PRIVILEGES ON $IdentityDb.* TO '$BenchmarkUser'@'%';
+GRANT ALL PRIVILEGES ON $MessengerDb.* TO '$BenchmarkUser'@'%';
+FLUSH PRIVILEGES;
+SHOW GRANTS FOR '$BenchmarkUser'@'%';
+"@
+
+    $grantSql | docker exec -i -e MYSQL_PWD=$RootPassword $ContainerName mysql -uroot
+    Assert-LastCommandOk "Repair benchmark MySQL grants"
+
+    Write-Host "Benchmark MySQL grants are ready." -ForegroundColor Green
+}
+
 Set-Location $Root
 
 Write-Host ""
@@ -99,7 +136,14 @@ if ($mysqlRunning -ne $mysqlContainer) {
     throw "MySQL benchmark container is not running: $mysqlContainer. Start it first."
 }
 
-Wait-MySqlReady -ContainerName $mysqlContainer -RootPassword "myna_root_password"
+Wait-MySqlReady -ContainerName $mysqlContainer -RootPassword $rootPassword
+Repair-BenchmarkMySqlGrants `
+    -ContainerName $mysqlContainer `
+    -RootPassword $rootPassword `
+    -BenchmarkUser $benchmarkUser `
+    -BenchmarkPassword $benchmarkPassword `
+    -IdentityDb $identityDb `
+    -MessengerDb $messengerDb
 
 Write-Host ""
 Write-Host "Ensuring Redis is running..." -ForegroundColor Cyan
