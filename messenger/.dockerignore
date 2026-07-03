@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+env/
 
 venv/
 .venv/
@@ -18,6 +19,8 @@ htmlcov/
 
 *.log
 *.tmp
+myna_api_test_reports/
+api_tests/
 db.sqlite3
 RUN_INSTRUCTIONS.md
 MYNA_MESSENGER_API_FRONTEND_E2EE_SPEC.md

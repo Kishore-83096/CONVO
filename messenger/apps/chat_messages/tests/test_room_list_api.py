@@ -3,12 +3,14 @@ from datetime import timedelta
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.e2ee_devices.models import Device
+from apps.rooms.models import Room
 
 from ..services import send_direct_message
 
@@ -22,6 +24,8 @@ class RoomListAPITests(APITestCase):
     )
 
     def setUp(self):
+        cache.clear()
+
         Device.objects.create(
             id=self.sender_device_id,
             user_id="1",
@@ -45,6 +49,23 @@ class RoomListAPITests(APITestCase):
             signed_prekey_id=1,
             signed_prekey_public="RECIPIENT_SIGNED_PREKEY",
             signed_prekey_signature="RECIPIENT_SIGNATURE",
+            key_algorithm="curve25519",
+            key_bundle_version=1,
+        )
+
+        self.second_recipient_device_id = uuid.UUID(
+            "33333333-3333-4333-8333-333333333333"
+        )
+        Device.objects.create(
+            id=self.second_recipient_device_id,
+            user_id="3",
+            device_name="Second recipient browser",
+            platform="web",
+            registration_id=30001,
+            identity_key_public="SECOND_RECIPIENT_IDENTITY_PUBLIC",
+            signed_prekey_id=1,
+            signed_prekey_public="SECOND_RECIPIENT_SIGNED_PREKEY",
+            signed_prekey_signature="SECOND_RECIPIENT_SIGNATURE",
             key_algorithm="curve25519",
             key_bundle_version=1,
         )
@@ -149,3 +170,74 @@ class RoomListAPITests(APITestCase):
         response = self.client.get("/api/v1/rooms/")
 
         self.assert_room_list_response(response)
+
+    def test_room_list_orders_newest_updated_room_first(self):
+        second_room = send_direct_message(
+            sender_user_id="1",
+            recipient_user_id="3",
+            sender_device_id=self.sender_device_id,
+            client_message_id=uuid.UUID(
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+            ),
+            message_type="text",
+            encrypted_payload="SECOND_ROOM_CIPHERTEXT",
+            encryption_metadata={
+                "algorithm": "xchacha20poly1305",
+                "nonce": "SECOND_ROOM_NONCE",
+            },
+            encryption_version=1,
+            envelopes=[
+                {
+                    "recipient_device_id": str(self.sender_device_id),
+                    "protocol": "device_sync",
+                    "session_reference": "second-room-sender-sync",
+                    "wrapped_message_key": (
+                        "WRAPPED_KEY_FOR_SENDER_SECOND_ROOM"
+                    ),
+                    "key_wrap_metadata": {
+                        "algorithm": "device-sync-v1",
+                    },
+                    "envelope_version": 1,
+                },
+                {
+                    "recipient_device_id": str(
+                        self.second_recipient_device_id
+                    ),
+                    "protocol": "double_ratchet",
+                    "session_reference": (
+                        "second-room-recipient-ratchet"
+                    ),
+                    "wrapped_message_key": (
+                        "WRAPPED_KEY_FOR_SECOND_RECIPIENT"
+                    ),
+                    "key_wrap_metadata": {
+                        "algorithm": "double-ratchet",
+                    },
+                    "envelope_version": 1,
+                },
+            ],
+        ).room
+
+        Room.objects.filter(id=self.room.id).update(
+            updated_at=timezone.now() - timedelta(days=2),
+        )
+        Room.objects.filter(id=second_room.id).update(
+            updated_at=timezone.now() - timedelta(days=1),
+        )
+
+        self.authenticate_as("1")
+
+        response = self.client.get(
+            reverse("chat_messages:room-list")
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        room_ids = [item["id"] for item in response.json()["data"]]
+
+        self.assertEqual(
+            room_ids,
+            [
+                str(second_room.id),
+                str(self.room.id),
+            ],
+        )

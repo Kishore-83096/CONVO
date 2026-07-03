@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -29,6 +30,7 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
     recipient_contact_id = 101
 
     def setUp(self):
+        cache.clear()
         self.sender_device = Device.objects.create(
             id=self.sender_device_id,
             user_id="1",

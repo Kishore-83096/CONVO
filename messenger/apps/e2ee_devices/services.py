@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -64,6 +65,112 @@ def _normalize_user_id(user_id: Any) -> str:
 
     return normalized
 
+ACTIVE_DEVICE_IDS_CACHE_TTL_SECONDS = 30
+
+
+def get_active_device_ids_cache_key(user_id: str) -> str:
+    return f"active_devices:{str(user_id).strip()}"
+
+
+def invalidate_active_device_cache_for_user(user_id: Any) -> None:
+    normalized_user_id = str(user_id).strip()
+
+    if not normalized_user_id:
+        return
+
+    cache.delete(
+        get_active_device_ids_cache_key(normalized_user_id)
+    )
+
+
+def get_active_device_ids_for_user(user_id: Any) -> list[str]:
+    """
+    Return active device IDs for one user.
+
+    Only non-secret device identifiers are cached. Public keys,
+    private keys, signed prekeys, one-time prekeys, and envelope
+    material are never cached here.
+    """
+
+    normalized_user_id = _normalize_user_id(user_id)
+    cache_key = get_active_device_ids_cache_key(
+        normalized_user_id
+    )
+
+    cached_value = cache.get(cache_key)
+
+    if isinstance(cached_value, dict):
+        cached_device_ids = cached_value.get("device_ids")
+
+        if isinstance(cached_device_ids, list):
+            return [
+                str(device_id)
+                for device_id in cached_device_ids
+            ]
+
+    device_ids = [
+        str(device_id)
+        for device_id in (
+            Device.objects.filter(
+                user_id=normalized_user_id,
+                is_active=True,
+            )
+            .order_by(
+                "created_at",
+                "id",
+            )
+            .values_list(
+                "id",
+                flat=True,
+            )
+        )
+    ]
+
+    cache.set(
+        cache_key,
+        {
+            "device_ids": device_ids,
+        },
+        ACTIVE_DEVICE_IDS_CACHE_TTL_SECONDS,
+    )
+
+    return device_ids
+
+
+def get_active_device_user_ids_by_id(
+    *,
+    user_ids: list[Any] | tuple[Any, ...],
+) -> dict[str, str]:
+    """
+    Return {device_id: owner_user_id} for active devices.
+
+    This keeps the send-message hot path cheap while preserving
+    strict envelope validation.
+    """
+
+    normalized_user_ids = []
+    seen_user_ids = set()
+
+    for user_id in user_ids:
+        normalized_user_id = _normalize_user_id(user_id)
+
+        if normalized_user_id in seen_user_ids:
+            continue
+
+        seen_user_ids.add(normalized_user_id)
+        normalized_user_ids.append(normalized_user_id)
+
+    device_user_ids_by_id: dict[str, str] = {}
+
+    for normalized_user_id in normalized_user_ids:
+        for device_id in get_active_device_ids_for_user(
+            normalized_user_id
+        ):
+            device_user_ids_by_id[str(device_id)] = (
+                normalized_user_id
+            )
+
+    return device_user_ids_by_id
 
 def _validate_existing_device(
     *,

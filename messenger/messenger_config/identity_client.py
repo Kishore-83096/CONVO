@@ -1,10 +1,14 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class IdentityClientError(Exception):
@@ -122,9 +126,11 @@ def validate_identity_user_ids(
             "auth/users/validate",
         )
     ).strip()
-    print("IDENTITY BASE URL:", base_url)
-    print("IDENTITY VALIDATE PATH:", path)
-    print("IDENTITY VALIDATE URL:", f"{base_url}/{path.lstrip('/')}")
+    logger.debug(
+        "Identity user validation endpoint configured: %s/%s",
+        base_url,
+        path.lstrip("/"),
+    )
 
     if not base_url:
         raise IdentityClientError(
@@ -160,8 +166,10 @@ def validate_identity_user_ids(
             raw_response = response.read().decode("utf-8")
             status_code = response.status
 
-            print("IDENTITY STATUS:", status_code)
-            print("IDENTITY RESPONSE:", raw_response)
+            logger.debug(
+                "Identity user validation returned status %s.",
+                status_code,
+            )
     except HTTPError as error:
         if error.code == 404:
             raise UnknownIdentityUsersError(normalized_user_ids) from error

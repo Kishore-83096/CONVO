@@ -143,3 +143,93 @@ class ContactDeliveryPolicySyncSerializer(serializers.Serializer):
         attrs.pop("restricted_user_id", None)
 
         return attrs
+    
+
+
+class DirectContactStateSyncSerializer(serializers.Serializer):
+    """
+    Internal Identity -> Messenger saved-contact-state sync serializer.
+
+    Identity remains the source of truth for saved contacts.
+    Messenger only stores this state when a direct room already exists.
+
+    Directional relationship:
+
+        owner_user_id -> contact_user_id
+
+    Example:
+        A saved B is separate from B saved A.
+    """
+
+    owner_user_id = serializers.CharField(
+        max_length=128,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+    contact_user_id = serializers.CharField(
+        max_length=128,
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+    # Preferred field name.
+    identity_contact_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    # Optional alias in case Identity sends contact_id.
+    contact_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+        write_only=True,
+        default=None,
+    )
+
+    is_saved = serializers.BooleanField()
+
+    source_updated_at = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    def validate(self, attrs):
+        owner_user_id = attrs["owner_user_id"]
+        contact_user_id = attrs["contact_user_id"]
+
+        if owner_user_id == contact_user_id:
+            raise serializers.ValidationError(
+                {
+                    "contact_user_id": (
+                        "contact_user_id must be different from "
+                        "owner_user_id."
+                    )
+                }
+            )
+
+        identity_contact_id = attrs.get("identity_contact_id")
+        contact_id = attrs.get("contact_id")
+
+        if (
+            identity_contact_id is not None
+            and contact_id is not None
+            and identity_contact_id != contact_id
+        ):
+            raise serializers.ValidationError(
+                {
+                    "contact_id": (
+                        "contact_id must match identity_contact_id "
+                        "when both are provided."
+                    )
+                }
+            )
+
+        attrs["identity_contact_id"] = identity_contact_id or contact_id
+        attrs.pop("contact_id", None)
+
+        return attrs

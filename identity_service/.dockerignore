@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+env/
 
 venv/
 .venv/
@@ -19,4 +20,6 @@ tests/
 
 *.log
 *.tmp
+reports/
+myna_api_test_reports/
 RUN_INSTRUCTIONS.md

@@ -6,13 +6,23 @@ from apps.chat_messages.views import (
     RoomListView,
 )
 from messenger_config.views import CurrentIdentityView, HealthView
-from apps.chat_messages.policy_views import ContactDeliveryPolicySyncView
+from apps.chat_messages.policy_views import (
+    ContactDeliveryPolicySyncView,
+    DirectContactStateSyncView,
+)
+
+
 
 urlpatterns = [
     path(
         "api/v1/internal/contact-policies/",
         ContactDeliveryPolicySyncView.as_view(),
         name="internal-contact-policy-sync",
+    ),
+    path(
+        "api/v1/internal/contact-saved-state/",
+        DirectContactStateSyncView.as_view(),
+        name="internal-contact-saved-state-sync",
     ),
 
     path(

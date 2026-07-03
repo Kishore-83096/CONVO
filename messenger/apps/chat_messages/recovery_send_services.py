@@ -1,15 +1,22 @@
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from django.db import transaction
-
 from apps.e2ee_devices.models import RecoveryBundle
+from apps.e2ee_devices.recovery_services import (
+    recovery_bundle_is_active_for_user,
+)
 
 from .models import MessageRecoveryEnvelope
-from .services import send_direct_message
-from .policy_services import recipient_has_blocked_sender
+from .services import (
+    direct_send_profile_enabled,
+    profile_checkpoint,
+    send_direct_message,
+)
+from .policy_services import get_delivery_policy_snapshot
 
 class RecoveryEnvelopeValidationError(Exception):
     """Raised when required recovery envelopes are invalid."""
@@ -27,6 +34,9 @@ class RecoveryAwareDirectMessageResult:
     envelope_count: int
     recovery_envelope_count: int
     recipient_delivery_blocked: bool = False
+    recipient_device_ids: tuple[str, ...] = ()
+    realtime_event_payload: dict[str, Any] | None = None
+    profile_timings_ms: dict[str, float] | None = None
 
 
 def _canonical_json(value: dict) -> str:
@@ -105,8 +115,7 @@ def _validate_recovery_envelopes(
     active_bundles = {
         bundle.user_id: bundle
         for bundle in (
-            RecoveryBundle.objects.select_for_update()
-            .filter(
+            RecoveryBundle.objects.filter(
                 user_id__in=participant_ids,
                 is_active=True,
                 disabled_at__isnull=True,
@@ -153,6 +162,14 @@ def _validate_recovery_envelopes(
 
     return active_bundles
 
+def _active_recovery_bundle_exists(
+    *,
+    participant_ids: set[str],
+) -> bool:
+    return any(
+        recovery_bundle_is_active_for_user(user_id)
+        for user_id in participant_ids
+    )
 
 def _stored_recovery_envelopes_match(
     *,
@@ -224,6 +241,10 @@ def send_direct_message_with_recovery(
     reply_to_id: UUID | None = None,
     client_sent_at=None,
     attachment_ids: list | None = None,
+    sender_contact_validated_by_identity: bool = False,
+    identity_contact_id=None,
+    existing_room=None,
+    require_saved_contact: bool = False,
 ) -> RecoveryAwareDirectMessageResult:
     """
     Store the direct message, normal device envelopes, and optional
@@ -233,17 +254,37 @@ def send_direct_message_with_recovery(
     In that case, recovery envelopes for the recipient are ignored and only
     sender-owned recovery envelopes are allowed.
     """
+    profile_timings_ms = (
+        {}
+        if direct_send_profile_enabled()
+        else None
+    )
+    total_started_at = time.perf_counter()
 
+    phase_started_at = time.perf_counter()
     normalized_recovery_envelopes = (
         _normalize_recovery_envelopes(
             recovery_envelopes
         )
     )
+    profile_checkpoint(
+        profile_timings_ms,
+        "recovery_normalize_input",
+        phase_started_at,
+    )
 
-    recipient_delivery_blocked = recipient_has_blocked_sender(
+    phase_started_at = time.perf_counter()
+    delivery_policy_snapshot = get_delivery_policy_snapshot(
         recipient_user_id=str(recipient_user_id),
         sender_user_id=str(sender_user_id),
     )
+    profile_checkpoint(
+        profile_timings_ms,
+        "recovery_policy_snapshot",
+        phase_started_at,
+    )
+
+    recipient_delivery_blocked = delivery_policy_snapshot.is_blocked
 
     if recipient_delivery_blocked:
         normalized_recovery_envelopes = [
@@ -253,18 +294,46 @@ def send_direct_message_with_recovery(
             == str(sender_user_id)
         ]
 
-    _validate_recovery_envelopes(
-        sender_user_id=str(sender_user_id),
-        recipient_user_id=(
-            str(sender_user_id)
-            if recipient_delivery_blocked
-            else str(recipient_user_id)
-        ),
-        recovery_envelopes=(
-            normalized_recovery_envelopes
-        ),
+    recovery_recipient_user_id = (
+        str(sender_user_id)
+        if recipient_delivery_blocked
+        else str(recipient_user_id)
     )
 
+    recovery_participant_ids = {
+        str(sender_user_id),
+        recovery_recipient_user_id,
+    }
+
+    phase_started_at = time.perf_counter()
+    recovery_required = (
+        normalized_recovery_envelopes
+        or _active_recovery_bundle_exists(
+            participant_ids=recovery_participant_ids,
+        )
+    )
+    profile_checkpoint(
+        profile_timings_ms,
+        "recovery_bundle_check",
+        phase_started_at,
+    )
+
+    if recovery_required:
+        phase_started_at = time.perf_counter()
+        _validate_recovery_envelopes(
+            sender_user_id=str(sender_user_id),
+            recipient_user_id=recovery_recipient_user_id,
+            recovery_envelopes=(
+                normalized_recovery_envelopes
+            ),
+        )
+        profile_checkpoint(
+            profile_timings_ms,
+            "recovery_validate_envelopes",
+            phase_started_at,
+        )
+
+    phase_started_at = time.perf_counter()
     base_result = send_direct_message(
         sender_user_id=str(sender_user_id),
         recipient_user_id=str(recipient_user_id),
@@ -278,9 +347,23 @@ def send_direct_message_with_recovery(
         reply_to_id=reply_to_id,
         client_sent_at=client_sent_at,
         attachment_ids=attachment_ids,
+        sender_contact_validated_by_identity=(
+            sender_contact_validated_by_identity
+        ),
+        identity_contact_id=identity_contact_id,
+        existing_room=existing_room,
+        delivery_policy_snapshot=delivery_policy_snapshot,
+        require_saved_contact=require_saved_contact,
+        profile_timings_ms=profile_timings_ms,
+    )
+    profile_checkpoint(
+        profile_timings_ms,
+        "recovery_base_send_total",
+        phase_started_at,
     )
 
     if base_result.message_created:
+        phase_started_at = time.perf_counter()
         recovery_models = [
             MessageRecoveryEnvelope(
                 message=base_result.message,
@@ -305,11 +388,13 @@ def send_direct_message_with_recovery(
             )
         ]
 
-        for recovery_model in recovery_models:
-            recovery_model.full_clean()
-
         MessageRecoveryEnvelope.objects.bulk_create(
             recovery_models
+        )
+        profile_checkpoint(
+            profile_timings_ms,
+            "recovery_envelope_bulk_insert",
+            phase_started_at,
         )
 
     elif not _stored_recovery_envelopes_match(
@@ -323,6 +408,12 @@ def send_direct_message_with_recovery(
             "different recovery envelope data."
         )
 
+    profile_checkpoint(
+        profile_timings_ms,
+        "recovery_total",
+        total_started_at,
+    )
+
     return RecoveryAwareDirectMessageResult(
         room=base_result.room,
         message=base_result.message,
@@ -335,4 +426,7 @@ def send_direct_message_with_recovery(
         recipient_delivery_blocked=(
             base_result.recipient_delivery_blocked
         ),
+        recipient_device_ids=base_result.recipient_device_ids,
+        realtime_event_payload=base_result.realtime_event_payload,
+        profile_timings_ms=profile_timings_ms,
     )

@@ -1,4 +1,4 @@
-from flask import Blueprint, request
+from flask import Blueprint, request,current_app
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 
 from app.auth.schemas import (
@@ -39,7 +39,7 @@ def json_request_body() -> dict:
 
 
 @auth_blueprint.post("/register")
-@limiter.limit("5 per minute")
+@limiter.limit(lambda: current_app.config["REGISTER_RATE_LIMIT"])
 def register():
     payload = register_schema.load(json_request_body())
     user = register_user(payload)
@@ -53,7 +53,7 @@ def register():
 
 
 @auth_blueprint.post("/login")
-@limiter.limit("10 per minute")
+@limiter.limit(lambda: current_app.config["LOGIN_RATE_LIMIT"])
 def login():
     payload = login_schema.load(json_request_body())
     user, access_token, expires_at = login_user(payload)
@@ -72,7 +72,7 @@ def login():
 
 
 @auth_blueprint.post("/reset-password")
-@limiter.limit("5 per minute")
+@limiter.limit(lambda: current_app.config["RESET_PASSWORD_RATE_LIMIT"])
 @jwt_required()
 def reset_password():
     payload = reset_password_schema.load(json_request_body())
@@ -86,7 +86,7 @@ def reset_password():
 
 
 @auth_blueprint.delete("/delete-account")
-@limiter.limit("3 per minute")
+@limiter.limit(lambda: current_app.config["DELETE_ACCOUNT_RATE_LIMIT"])
 @jwt_required()
 def delete_account():
     payload = delete_account_schema.load(json_request_body())

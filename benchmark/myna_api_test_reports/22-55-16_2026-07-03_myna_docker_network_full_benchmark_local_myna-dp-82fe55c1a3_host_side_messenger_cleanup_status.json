@@ -1,0 +1,17 @@
+﻿{
+    "attempted":  true,
+    "success":  true,
+    "enabled":  true,
+    "mode":  "host_side_docker_mysql_database_reset",
+    "cleanup_type":  "host_side_messenger_cleanup",
+    "cleanup_method":  "drop_recreate_messenger_benchmark_database_and_rerun_migrations",
+    "stage":  "completed",
+    "messenger_database":  "myna_messenger_benchmark",
+    "mysql_container":  "mysql-benchmark-local",
+    "messenger_container":  "messenger-service-local",
+    "message_data_removed":  true,
+    "all_messenger_benchmark_data_removed":  true,
+    "messages_created_by_benchmark_removed":  true,
+    "message":  "Messenger benchmark messages/data removed successfully by dropping and recreating the Messenger benchmark database, then rerunning migrations.",
+    "completed_at":  "2026-07-03T22:55:30.1102814+05:30"
+}

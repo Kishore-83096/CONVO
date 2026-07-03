@@ -225,6 +225,7 @@ def add_contact(user_id: int, payload: dict) -> Contact:
             Contact.contact_user_id == contact_user.id,
         )
     )
+
     if existing_contact is not None:
         raise ApiError(
             "Contact is already in your contact list.",
@@ -236,6 +237,7 @@ def add_contact(user_id: int, payload: dict) -> Contact:
         contact_user=contact_user,
         saved_name=payload["saved_name"],
     )
+
     db.session.add(contact)
 
     try:
@@ -246,6 +248,14 @@ def add_contact(user_id: int, payload: dict) -> Contact:
             "Contact is already in your contact list.",
             status_code=409,
         ) from error
+
+    _sync_contact_saved_state_to_messenger(
+        owner_user_id=contact.owner_id,
+        contact_user_id=contact.contact_user_id,
+        identity_contact_id=contact.id,
+        is_saved=True,
+        source_updated_at=contact.updated_at,
+    )
 
     return contact
 
@@ -302,10 +312,33 @@ def rename_contact(
     return contact
 
 
+
 def delete_contact(user_id: int, contact_id: int) -> None:
     contact = get_contact(user_id, contact_id)
+
+    owner_user_id = contact.owner_id
+    contact_user_id = contact.contact_user_id
+    identity_contact_id = contact.id
+    deleted_at = utc_now()
+
     db.session.delete(contact)
-    db.session.commit()
+
+    try:
+        db.session.commit()
+    except IntegrityError as error:
+        db.session.rollback()
+        raise ApiError(
+            "Could not delete contact.",
+            status_code=409,
+        ) from error
+
+    _sync_contact_saved_state_to_messenger(
+        owner_user_id=owner_user_id,
+        contact_user_id=contact_user_id,
+        identity_contact_id=identity_contact_id,
+        is_saved=False,
+        source_updated_at=deleted_at,
+    )
 
 
 def _get_or_create_delivery_policy(
@@ -410,6 +443,127 @@ def _sync_delivery_policy_to_messenger(
             "Messenger policy sync is unavailable.",
             status_code=502,
         ) from error
+
+
+def _sync_contact_saved_state_to_messenger(
+    *,
+    owner_user_id: int,
+    contact_user_id: int,
+    identity_contact_id: int,
+    is_saved: bool,
+    source_updated_at=None,
+) -> None:
+    """
+    Sync Identity saved-contact state to Messenger.
+
+    Identity is the source of truth for contacts.
+    Messenger only stores saved=true/false if a direct room already exists.
+
+    This sync is intentionally best-effort by default:
+    - contact add/delete should not fail only because Messenger is down
+    - Messenger will ignore the event if no direct room exists
+    """
+
+    base_url = current_app.config.get(
+        "MESSENGER_SERVICE_BASE_URL",
+        "",
+    )
+
+    internal_secret = current_app.config.get(
+        "MESSENGER_INTERNAL_SECRET",
+        "",
+    )
+
+    sync_required = current_app.config.get(
+        "MESSENGER_POLICY_SYNC_REQUIRED",
+        False,
+    )
+
+    if not base_url or not internal_secret:
+        message = (
+            "Messenger contact saved-state sync is not configured."
+        )
+
+        if sync_required:
+            raise ApiError(
+                message,
+                status_code=500,
+            )
+
+        current_app.logger.warning(message)
+        return
+
+    payload = {
+        "owner_user_id": str(owner_user_id),
+        "contact_user_id": str(contact_user_id),
+        "identity_contact_id": int(identity_contact_id),
+        "is_saved": bool(is_saved),
+        "source_updated_at": _dt(source_updated_at),
+    }
+
+    url = (
+        f"{base_url.rstrip('/')}"
+        "/api/v1/internal/contact-saved-state/"
+    )
+
+    body = json.dumps(payload).encode("utf-8")
+
+    request = Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Myna-Internal-Secret": internal_secret,
+        },
+        method="POST",
+    )
+
+    timeout_seconds = current_app.config.get(
+        "MESSENGER_POLICY_SYNC_TIMEOUT_SECONDS",
+        3,
+    )
+
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            if response.status >= 400:
+                raise ApiError(
+                    "Messenger contact saved-state sync failed.",
+                    status_code=502,
+                )
+
+    except HTTPError as error:
+        message = "Messenger contact saved-state sync failed."
+
+        if sync_required:
+            raise ApiError(
+                message,
+                status_code=502,
+            ) from error
+
+        current_app.logger.warning(
+            "%s owner_user_id=%s contact_user_id=%s status=%s",
+            message,
+            owner_user_id,
+            contact_user_id,
+            getattr(error, "code", None),
+        )
+
+    except (URLError, TimeoutError, OSError) as error:
+        message = "Messenger contact saved-state sync is unavailable."
+
+        if sync_required:
+            raise ApiError(
+                message,
+                status_code=502,
+            ) from error
+
+        current_app.logger.warning(
+            "%s owner_user_id=%s contact_user_id=%s error=%s",
+            message,
+            owner_user_id,
+            contact_user_id,
+            error,
+        )
 
 
 def set_contact_block_status(

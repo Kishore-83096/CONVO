@@ -100,7 +100,15 @@ class Device(models.Model):
                     "is_active",
                 ],
                 name="device_user_active_idx",
+            ),  
+            models.Index(
+                fields=[
+                    "user_id",
+                    "-last_seen_at",
+                ],
+                name="device_user_seen_idx",
             ),
+
         ]
 
     def __str__(self) -> str:

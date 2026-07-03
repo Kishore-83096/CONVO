@@ -42,4 +42,4 @@ HEALTHCHECK --interval=30s \
 
 ENTRYPOINT ["python", "docker_entrypoint.py"]
 
-CMD ["sh", "-c", "exec daphne -b 0.0.0.0 -p ${PORT:-8000} messenger_config.asgi:application"]
+CMD ["sh", "-c", "ACCESS_LOGFILE=/dev/null; if [ \"${GUNICORN_ACCESS_LOG:-1}\" = \"1\" ]; then ACCESS_LOGFILE=-; fi; exec gunicorn messenger_config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-5} --backlog ${GUNICORN_BACKLOG:-2048} --timeout ${GUNICORN_TIMEOUT:-60} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30} --keep-alive ${GUNICORN_KEEP_ALIVE:-5} --access-logfile \"$ACCESS_LOGFILE\" --error-logfile -"]

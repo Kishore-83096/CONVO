@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -28,6 +29,8 @@ class ContactPolicyGhostAPITests(APITestCase):
     )
 
     def setUp(self):
+        cache.clear()
+
         self.sender_device = Device.objects.create(
             id=self.sender_device_id,
             user_id="1",
@@ -248,12 +251,11 @@ class ContactPolicyGhostAPITests(APITestCase):
         )
 
         message = Message.objects.get()
-        decision = DirectMessageReceiptDecision.objects.get(
-            message=message,
+        self.assertFalse(
+            DirectMessageReceiptDecision.objects.filter(
+                message=message,
+            ).exists()
         )
-
-        self.assertEqual(decision.policy_reason, "normal")
-        self.assertFalse(decision.suppress_delivered_receipt)
 
         self.authenticate_as("2")
 

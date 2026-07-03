@@ -1,14 +1,19 @@
 import uuid
+from unittest.mock import patch
 
+from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.db import transaction
 from django.test import TransactionTestCase, override_settings
 
 from apps.chat_messages.models import Message, MessageKeyEnvelope
 from apps.e2ee_devices.models import Device
 from apps.realtime.events import MESSAGE_STORED
+from apps.realtime.models import RealtimeOutboxEvent
 from apps.realtime.publishers import (
     make_device_group_name,
     publish_direct_message_stored,
+    schedule_direct_message_stored_publish,
 )
 from apps.rooms.models import Room, RoomMember
 
@@ -19,6 +24,22 @@ TEST_CHANNEL_LAYERS = {
     },
 }
 
+class FailingChannelLayer:
+    async def group_send(self, group, message):
+        raise ConnectionError("redis unavailable")
+
+
+class RecordingChannelLayer:
+    def __init__(self):
+        self.sent = []
+
+    async def group_send(self, group, message):
+        self.sent.append(
+            {
+                "group": group,
+                "message": message,
+            }
+        )
 
 @override_settings(
     CHANNEL_LAYERS=TEST_CHANNEL_LAYERS,
@@ -180,6 +201,109 @@ class DirectMessagePublisherTests(TransactionTestCase):
         self.assertNotIn("wrapped_message_key", data)
         self.assertNotIn("recovery_envelopes", data)
 
+    
+
+
+    def test_scheduled_prebuilt_payload_publishes_after_commit_without_outbox(self):
+        channel_layer = get_channel_layer()
+        channel_name = async_to_sync(channel_layer.new_channel)()
+
+        async_to_sync(channel_layer.group_add)(
+            make_device_group_name(str(self.recipient_device_id)),
+            channel_name,
+        )
+
+        event_payload = {
+            "room_id": str(self.room.id),
+            "message_id": str(self.message.id),
+            "client_message_id": str(self.message.client_message_id),
+            "sender_user_id": "1",
+            "message_type": "text",
+            "requires_fetch": True,
+        }
+
+        with transaction.atomic():
+            schedule_direct_message_stored_publish(
+                message_id=str(self.message.id),
+                recipient_user_id="2",
+                event_payload=event_payload,
+                recipient_device_ids=(str(self.recipient_device_id),),
+            )
+
+        event = async_to_sync(channel_layer.receive)(channel_name)
+
+        self.assertEqual(event["type"], "realtime.event")
+        self.assertEqual(event["payload"]["type"], MESSAGE_STORED)
+        self.assertEqual(
+            event["payload"]["data"],
+            event_payload,
+        )
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 0)
+
+    def test_scheduled_prebuilt_payload_falls_back_to_outbox_when_publish_fails(self):
+        event_payload = {
+            "room_id": str(self.room.id),
+            "message_id": str(self.message.id),
+            "client_message_id": str(self.message.client_message_id),
+            "sender_user_id": "1",
+            "message_type": "text",
+            "requires_fetch": True,
+        }
+
+        with patch(
+            "apps.realtime.outbox.get_channel_layer",
+            return_value=FailingChannelLayer(),
+        ):
+            with transaction.atomic():
+                schedule_direct_message_stored_publish(
+                    message_id=str(self.message.id),
+                    recipient_user_id="2",
+                    event_payload=event_payload,
+                    recipient_device_ids=(str(self.recipient_device_id),),
+                )
+
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
+
+        outbox_event = RealtimeOutboxEvent.objects.get()
+
+        self.assertEqual(outbox_event.event_type, MESSAGE_STORED)
+        self.assertEqual(
+            outbox_event.target_group,
+            make_device_group_name(str(self.recipient_device_id)),
+        )
+        self.assertEqual(
+            outbox_event.payload["data"],
+            event_payload,
+        )
+        self.assertIn("redis unavailable", outbox_event.last_error)
+
+    def test_scheduled_prebuilt_payload_does_not_publish_when_transaction_rolls_back(self):
+        recording_layer = RecordingChannelLayer()
+        event_payload = {
+            "room_id": str(self.room.id),
+            "message_id": str(self.message.id),
+            "client_message_id": str(self.message.client_message_id),
+            "sender_user_id": "1",
+            "message_type": "text",
+            "requires_fetch": True,
+        }
+
+        with patch(
+            "apps.realtime.outbox.get_channel_layer",
+            return_value=recording_layer,
+        ):
+            with self.assertRaises(RuntimeError):
+                with transaction.atomic():
+                    schedule_direct_message_stored_publish(
+                        message_id=str(self.message.id),
+                        recipient_user_id="2",
+                        event_payload=event_payload,
+                        recipient_device_ids=(str(self.recipient_device_id),),
+                    )
+                    raise RuntimeError("force rollback")
+
+        self.assertEqual(recording_layer.sent, [])
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 0)
     async def test_publish_direct_message_stored_skips_when_no_recipient_envelope(self):
         result = await publish_direct_message_stored(
             message_id=str(self.message.id),

@@ -154,6 +154,14 @@ class Message(models.Model):
             ),
             models.Index(
                 fields=[
+                    "room",
+                    "-created_at",
+                    "-id",
+                ],
+                name="msg_room_newest_idx",
+            ),
+            models.Index(
+                fields=[
                     "sender_user_id",
                     "created_at",
                 ],
@@ -1301,6 +1309,167 @@ class ContactDeliveryPolicy(models.Model):
 
         if errors:
             raise ValidationError(errors)
+
+
+
+class DirectContactState(models.Model):
+    """
+    Messenger-local saved-contact state for an existing direct room.
+
+    Identity remains the source of truth for saved contacts.
+    Messenger stores this only for direct-room pairs that already have
+    a conversation room.
+
+    This model is directional:
+
+        owner_user_id -> contact_user_id
+
+    Example:
+        A saved B is different from B saved A.
+
+    Product rule:
+        If owner_user_id has contact_user_id saved, owner can send.
+        If saved is false, owner cannot send to contact_user_id.
+        Receiving is controlled separately by block/ghost policy.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    room = models.ForeignKey(
+        Room,
+        on_delete=models.CASCADE,
+        related_name="direct_contact_states",
+    )
+
+    # The user who owns the contact-list relationship.
+    # Example: A saved B => owner_user_id = A.
+    owner_user_id = models.CharField(
+        max_length=EXTERNAL_USER_ID_MAX_LENGTH,
+    )
+
+    # The target user in that contact-list relationship.
+    # Example: A saved B => contact_user_id = B.
+    contact_user_id = models.CharField(
+        max_length=EXTERNAL_USER_ID_MAX_LENGTH,
+    )
+
+    # Identity service contact ID.
+    # Nullable because old rooms may be backfilled later, and Messenger
+    # should not depend on this value for room_id sends.
+    identity_contact_id = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    is_saved = models.BooleanField(
+        default=True,
+    )
+
+    # Optional timestamp from Identity when the source contact changed.
+    source_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    synced_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "messenger_direct_contact_states"
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "owner_user_id",
+                    "contact_user_id",
+                ],
+                name="uniq_direct_contact_state_owner_contact",
+            ),
+            models.CheckConstraint(
+                condition=~Q(
+                    owner_user_id=models.F("contact_user_id"),
+                ),
+                name="ck_direct_contact_state_not_self",
+            ),
+        ]
+
+        indexes = [
+            models.Index(
+                fields=[
+                    "owner_user_id",
+                    "contact_user_id",
+                    "is_saved",
+                ],
+                name="direct_contact_send_lookup_idx",
+            ),
+            models.Index(
+                fields=[
+                    "room",
+                    "owner_user_id",
+                ],
+                name="direct_contact_room_owner_idx",
+            ),
+            models.Index(
+                fields=[
+                    "owner_user_id",
+                    "identity_contact_id",
+                ],
+                name="direct_contact_identity_idx",
+            ),
+        ]
+
+    def clean(self) -> None:
+        super().clean()
+
+        self.owner_user_id = str(self.owner_user_id).strip()
+        self.contact_user_id = str(self.contact_user_id).strip()
+
+        errors = {}
+
+        if not self.owner_user_id:
+            errors["owner_user_id"] = "Owner user ID is required."
+
+        if not self.contact_user_id:
+            errors["contact_user_id"] = "Contact user ID is required."
+
+        if (
+            self.owner_user_id
+            and self.contact_user_id
+            and self.owner_user_id == self.contact_user_id
+        ):
+            errors["contact_user_id"] = (
+                "Contact user ID must be different from owner user ID."
+            )
+
+        if self.room_id and self.room.room_type != Room.RoomType.DIRECT:
+            errors["room"] = (
+                "Direct contact state can only belong to a direct room."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def __str__(self) -> str:
+        return (
+            f"DirectContactState("
+            f"owner={self.owner_user_id}, "
+            f"contact={self.contact_user_id}, "
+            f"saved={self.is_saved})"
+        )
+
 
 
 

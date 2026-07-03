@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 
@@ -12,6 +13,8 @@ from apps.chat_messages.policy_services import (
 
 
 class ContactPolicyDirectionalRuleTests(TestCase):
+    def setUp(self):
+        cache.clear()
     def test_user_can_view_own_presence(self):
         self.assertTrue(
             can_view_presence(

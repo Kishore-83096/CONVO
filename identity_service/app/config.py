@@ -200,3 +200,34 @@ class Config:
         os.getenv("MESSENGER_POLICY_SYNC_REQUIRED"),
         default=False,
     )
+
+
+    REGISTER_RATE_LIMIT = os.getenv(
+        "REGISTER_RATE_LIMIT",
+        "5 per minute",
+    )
+
+    LOGIN_RATE_LIMIT = os.getenv(
+        "LOGIN_RATE_LIMIT",
+        "10 per minute",
+    )
+
+    RESET_PASSWORD_RATE_LIMIT = os.getenv(
+        "RESET_PASSWORD_RATE_LIMIT",
+        "5 per minute",
+    )
+
+    DELETE_ACCOUNT_RATE_LIMIT = os.getenv(
+        "DELETE_ACCOUNT_RATE_LIMIT",
+        "3 per minute",
+    )
+
+    CONTACT_SEARCH_RATE_LIMIT = os.getenv(
+        "CONTACT_SEARCH_RATE_LIMIT",
+        "20 per minute",
+    )
+
+    CONTACT_ADD_RATE_LIMIT = os.getenv(
+        "CONTACT_ADD_RATE_LIMIT",
+        "20 per minute",
+    )

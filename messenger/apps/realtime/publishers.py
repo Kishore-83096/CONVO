@@ -10,7 +10,9 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from django.db import transaction
+
 from .outbox import send_realtime_group_event
+
 from apps.chat_messages.models import (
     GroupMessageEncryption,
     Message,
@@ -390,6 +392,8 @@ def schedule_direct_message_stored_publish(
     *,
     message_id: Any,
     recipient_user_id: Any,
+    event_payload: dict[str, Any] | None = None,
+    recipient_device_ids: tuple[Any, ...] | list[Any] | None = None,
 ) -> None:
     """
     Schedule direct message realtime publish after database commit.
@@ -402,8 +406,30 @@ def schedule_direct_message_stored_publish(
 
     normalized_message_id = str(message_id).strip()
     normalized_recipient_user_id = str(recipient_user_id).strip()
+    normalized_recipient_device_ids = tuple(
+        str(device_id).strip()
+        for device_id in (recipient_device_ids or ())
+        if str(device_id).strip()
+    )
 
     def publish_after_commit():
+        if event_payload is not None and normalized_recipient_device_ids:
+            websocket_payload = build_event(
+                MESSAGE_STORED,
+                event_payload,
+            )
+
+            for recipient_device_id in normalized_recipient_device_ids:
+                async_to_sync(send_realtime_group_event)(
+                    event_type=websocket_payload["type"],
+                    target_group=make_device_group_name(
+                        recipient_device_id,
+                    ),
+                    payload=websocket_payload,
+                )
+
+            return
+
         try:
             async_to_sync(publish_direct_message_stored)(
                 message_id=normalized_message_id,

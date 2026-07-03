@@ -306,7 +306,6 @@ def initiate_encrypted_attachment(
     return attachment
 
 
-@transaction.atomic
 def complete_encrypted_attachment(
     *,
     authenticated_user_id: Any,

@@ -1,9 +1,59 @@
 from dataclasses import dataclass
+from typing import Any
 
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
+
 from .models import RecoveryBundle
+
+
+RECOVERY_ACTIVE_CACHE_TTL_SECONDS = 30
+
+
+def get_recovery_active_cache_key(user_id: Any) -> str:
+    return f"recovery_active:{str(user_id).strip()}"
+
+
+def invalidate_recovery_active_cache_for_user(user_id: Any) -> None:
+    normalized_user_id = str(user_id).strip()
+
+    if not normalized_user_id:
+        return
+
+    cache.delete(
+        get_recovery_active_cache_key(normalized_user_id)
+    )
+
+
+def recovery_bundle_is_active_for_user(user_id: Any) -> bool:
+    normalized_user_id = str(user_id).strip()
+
+    if not normalized_user_id:
+        return False
+
+    cache_key = get_recovery_active_cache_key(
+        normalized_user_id
+    )
+    cached_value = cache.get(cache_key)
+
+    if isinstance(cached_value, bool):
+        return cached_value
+
+    is_active = RecoveryBundle.objects.filter(
+        user_id=normalized_user_id,
+        is_active=True,
+        disabled_at__isnull=True,
+    ).exists()
+
+    cache.set(
+        cache_key,
+        is_active,
+        RECOVERY_ACTIVE_CACHE_TTL_SECONDS,
+    )
+
+    return is_active
 
 
 class RecoveryAlreadyConfiguredError(Exception):

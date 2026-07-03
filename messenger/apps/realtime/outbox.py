@@ -34,8 +34,7 @@ def calculate_next_attempt_at(
     )
 
 
-@database_sync_to_async
-def enqueue_realtime_outbox_event(
+def enqueue_realtime_outbox_event_sync(
     *,
     event_type: str,
     target_group: str,
@@ -49,6 +48,22 @@ def enqueue_realtime_outbox_event(
         status=RealtimeOutboxEvent.Status.PENDING,
         attempts=0,
         next_attempt_at=timezone.now(),
+        last_error=str(last_error or "")[:5000],
+    )
+
+
+@database_sync_to_async
+def enqueue_realtime_outbox_event(
+    *,
+    event_type: str,
+    target_group: str,
+    payload: dict[str, Any],
+    last_error: str = "",
+) -> RealtimeOutboxEvent:
+    return enqueue_realtime_outbox_event_sync(
+        event_type=str(event_type).strip(),
+        target_group=str(target_group).strip(),
+        payload=payload,
         last_error=str(last_error or "")[:5000],
     )
 

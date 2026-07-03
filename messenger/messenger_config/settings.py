@@ -104,6 +104,7 @@ if env.bool("MESSENGER_DOCKER", default=False):
                 *ALLOWED_HOSTS,
                 "127.0.0.1",
                 "localhost",
+                "messenger-service-local",
             ]
         )
     )
@@ -120,6 +121,11 @@ CSRF_TRUSTED_ORIGINS = env.list(
 
 IDENTITY_SERVICE_BASE_URL = env(
     "IDENTITY_SERVICE_BASE_URL"
+).strip().rstrip("/")
+
+MESSENGER_SERVICE_BASE_URL = env(
+    "MESSENGER_SERVICE_BASE_URL",
+    default="http://127.0.0.1:8000",
 ).strip().rstrip("/")
 
 FRONTEND_ORIGINS = env.list(
@@ -461,7 +467,7 @@ DATABASES = {
 
 DATABASES["default"]["CONN_MAX_AGE"] = env.int(
     "DB_CONN_MAX_AGE",
-    default=0,
+    default=60,
 )
 
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True

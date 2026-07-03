@@ -1,12 +1,14 @@
+import time
+
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
 from apps.realtime.publishers import (
     schedule_direct_message_stored_publish,
 )
-from apps.rooms.models import Room, RoomMember
 from messenger_config.identity_client import (
     IdentityClientError,
     SavedContactForbiddenError,
@@ -27,8 +29,12 @@ from .serializers import (
 from .services import (
     DirectMessageValidationError,
     DirectRoomUnavailableError,
+    direct_send_profile_enabled,
     IdempotencyConflictError,
     MessageHistoryAccessError,
+    profile_checkpoint,
+    resolve_existing_direct_room_recipient,
+    SavedContactRequiredError,
     get_encrypted_message_history,
     list_user_rooms,
 )
@@ -44,57 +50,20 @@ def validation_error_response(errors):
         status=status.HTTP_400_BAD_REQUEST,
     )
 
-
-def resolve_existing_direct_room_recipient(
-    *,
-    authenticated_user_id: str,
-    room_id,
-) -> str:
-    room = Room.objects.filter(
-        id=room_id,
-        room_type=Room.RoomType.DIRECT,
-        is_active=True,
-    ).first()
-
-    if room is None:
-        raise DirectRoomUnavailableError(
-            "Direct room is unavailable."
-        )
-
-    is_member = RoomMember.objects.filter(
-        room=room,
-        user_id=authenticated_user_id,
-        is_active=True,
-    ).exists()
-
-    if not is_member:
-        raise DirectRoomUnavailableError(
-            "Direct room is unavailable."
-        )
-
-    recipient_member = (
-        RoomMember.objects.filter(
-            room=room,
-            is_active=True,
-        )
-        .exclude(user_id=authenticated_user_id)
-        .first()
-    )
-
-    if recipient_member is None:
-        raise DirectRoomUnavailableError(
-            "Direct room recipient is unavailable."
-        )
-
-    return str(recipient_member.user_id)
-
-
 class SendDirectMessageView(APIView):
     permission_classes = [
         IsAuthenticated,
     ]
 
     def post(self, request) -> Response:
+        view_timings_ms = (
+            {}
+            if direct_send_profile_enabled()
+            else None
+        )
+        view_started_at = time.perf_counter()
+        phase_started_at = time.perf_counter()
+
         serializer = SendDirectMessageSerializer(
             data=request.data,
         )
@@ -103,11 +72,23 @@ class SendDirectMessageView(APIView):
             return validation_error_response(
                 serializer.errors,
             )
+        profile_checkpoint(
+            view_timings_ms,
+            "view_serializer_validation",
+            phase_started_at,
+        )
 
+        phase_started_at = time.perf_counter()
         authenticated_user_id = str(
             request.user.user_id,
         )
+        profile_checkpoint(
+            view_timings_ms,
+            "view_authenticated_user",
+            phase_started_at,
+        )
 
+        phase_started_at = time.perf_counter()
         validated_data = dict(serializer.validated_data)
 
         recipient_contact_id = validated_data.pop(
@@ -124,33 +105,70 @@ class SendDirectMessageView(APIView):
             "HTTP_AUTHORIZATION",
             "",
         )
+        profile_checkpoint(
+            view_timings_ms,
+            "view_payload_prepare",
+            phase_started_at,
+        )
 
         try:
+            sender_contact_validated_by_identity = False
+            identity_contact_id = None
+            existing_room = None
+
+            phase_started_at = time.perf_counter()
             if room_id is not None:
-                recipient_user_id = resolve_existing_direct_room_recipient(
-                    authenticated_user_id=authenticated_user_id,
-                    room_id=room_id,
+                existing_room, recipient_user_id = (
+                    resolve_existing_direct_room_recipient(
+                        authenticated_user_id=authenticated_user_id,
+                        room_id=room_id,
+                    )
                 )
             else:
                 resolved_recipient = resolve_saved_contact_recipient(
                     contact_id=recipient_contact_id,
                     authorization_header=authorization_header,
                 )
-                recipient_user_id = resolved_recipient.contact_user_id
 
+                recipient_user_id = resolved_recipient.contact_user_id
+                sender_contact_validated_by_identity = True
+                identity_contact_id = resolved_recipient.contact_id
+            profile_checkpoint(
+                view_timings_ms,
+                "view_recipient_resolution",
+                phase_started_at,
+            )
+
+            phase_started_at = time.perf_counter()
             result = send_direct_message_with_recovery(
                 sender_user_id=authenticated_user_id,
                 recipient_user_id=recipient_user_id,
+                sender_contact_validated_by_identity=(
+                    sender_contact_validated_by_identity
+                ),
+                identity_contact_id=identity_contact_id,
+                existing_room=existing_room,
+                require_saved_contact=existing_room is not None,
                 **validated_data,
             )
+            profile_checkpoint(
+                view_timings_ms,
+                "view_service_call",
+                phase_started_at,
+            )
+            if result.profile_timings_ms is not None:
+                result.profile_timings_ms.update(view_timings_ms or {})
 
-        except SavedContactForbiddenError as error:
+        except (
+            SavedContactForbiddenError,
+            SavedContactRequiredError,
+        ) as error:
             return Response(
                 {
                     "success": False,
                     "message": (
                         str(error)
-                        or "You must save this contact before messaging."
+                        or "Save this contact before sending a message."
                     ),
                 },
                 status=status.HTTP_403_FORBIDDEN,
@@ -214,10 +232,24 @@ class SendDirectMessageView(APIView):
             result.message_created
             and not result.recipient_delivery_blocked
         ):
+            phase_started_at = time.perf_counter()
             schedule_direct_message_stored_publish(
                 message_id=result.message.id,
                 recipient_user_id=recipient_user_id,
+                event_payload=result.realtime_event_payload,
+                recipient_device_ids=result.recipient_device_ids,
             )
+            if result.profile_timings_ms is not None:
+                result.profile_timings_ms[
+                    "view_realtime_outbox_enqueue"
+                ] = round(
+                    (
+                        time.perf_counter()
+                        - phase_started_at
+                    )
+                    * 1000,
+                    2,
+                )
         response_status = (
             status.HTTP_201_CREATED
             if result.message_created
@@ -230,34 +262,52 @@ class SendDirectMessageView(APIView):
             else "Existing encrypted message returned."
         )
 
+        phase_started_at = time.perf_counter()
+        response_data = {
+            "room_id": str(result.room.id),
+            "room_type": result.room.room_type,
+            "room_created": result.room_created,
+            "message_id": str(result.message.id),
+            "client_message_id": str(
+                result.message.client_message_id,
+            ),
+            "message_created": result.message_created,
+            "envelope_count": result.envelope_count,
+            "recovery_envelope_count": (
+                result.recovery_envelope_count
+            ),
+            "recipient_delivery_blocked": (
+                result.recipient_delivery_blocked
+            ),
+            "recipient_contact_id": recipient_contact_id,
+            "request_room_id": (
+                str(room_id)
+                if room_id is not None
+                else None
+            ),
+            "created_at": result.message.created_at,
+        }
+
+        if result.profile_timings_ms is not None:
+            profile_checkpoint(
+                result.profile_timings_ms,
+                "view_response_build",
+                phase_started_at,
+            )
+            profile_checkpoint(
+                result.profile_timings_ms,
+                "view_total",
+                view_started_at,
+            )
+            response_data["server_timing_ms"] = (
+                result.profile_timings_ms
+            )
+
         return Response(
             {
                 "success": True,
                 "message": response_message,
-                "data": {
-                    "room_id": str(result.room.id),
-                    "room_type": result.room.room_type,
-                    "room_created": result.room_created,
-                    "message_id": str(result.message.id),
-                    "client_message_id": str(
-                        result.message.client_message_id,
-                    ),
-                    "message_created": result.message_created,
-                    "envelope_count": result.envelope_count,
-                    "recovery_envelope_count": (
-                        result.recovery_envelope_count
-                    ),
-                    "recipient_delivery_blocked": (
-                        result.recipient_delivery_blocked
-                    ),
-                    "recipient_contact_id": recipient_contact_id,
-                    "request_room_id": (
-                        str(room_id)
-                        if room_id is not None
-                        else None
-                    ),
-                    "created_at": result.message.created_at,
-                },
+                "data": response_data,
             },
             status=response_status,
         )

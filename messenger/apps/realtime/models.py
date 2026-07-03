@@ -161,6 +161,14 @@ class RealtimeOutboxEvent(models.Model):
             ),
             models.Index(
                 fields=[
+                    "status",
+                    "next_attempt_at",
+                    "created_at",
+                ],
+                name="rt_outbox_due_idx",
+            ),
+            models.Index(
+                fields=[
                     "event_type",
                     "created_at",
                 ],

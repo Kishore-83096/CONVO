@@ -302,6 +302,15 @@ class RoomMember(models.Model):
             ),
             models.Index(
                 fields=[
+                    "room",
+                    "is_active",
+                    "joined_at",
+                    "id",
+                ],
+                name="member_room_active_join_idx",
+            ),
+            models.Index(
+                fields=[
                     "user_id",
                     "is_active",
                 ],

@@ -18,6 +18,12 @@ secrets/
 **/venv/
 **/env/
 **/ENV/
+!identity_service/env/
+!identity_service/env/*.env.example
+!identity_service/env/*.example.env
+!messenger/env/
+!messenger/env/*.env.example
+!messenger/env/*.example.env
 
 # Python bytecode and caches
 __pycache__/
@@ -58,6 +64,9 @@ htmlcov/
 .cache/
 test-results/
 reports/
+/files/myna_api_test_reports/
+/benchmark/*.env
+!benchmark/*.env.example
 
 # Framework runtime files
 instance/

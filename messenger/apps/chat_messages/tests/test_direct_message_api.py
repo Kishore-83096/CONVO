@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import jwt
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -15,9 +16,15 @@ from messenger_config.identity_client import (
     SavedContactForbiddenError,
 )
 from apps.e2ee_devices.models import Device
+from apps.e2ee_devices.services import get_active_device_ids_for_user
 from apps.rooms.models import Room, RoomMember
 
-from ..models import ContactDeliveryPolicy, Message, MessageKeyEnvelope
+from ..models import (
+    ContactDeliveryPolicy,
+    DirectMessageReceiptDecision,
+    Message,
+    MessageKeyEnvelope,
+)
 from ..services import build_direct_pair_key
 
 class DirectMessageSendingAPITests(APITestCase):
@@ -33,6 +40,7 @@ class DirectMessageSendingAPITests(APITestCase):
     recipient_contact_id = 101
 
     def setUp(self):
+        cache.clear()
         self.sender_device = Device.objects.create(
             id=self.sender_device_id,
             user_id="1",
@@ -219,6 +227,69 @@ class DirectMessageSendingAPITests(APITestCase):
             },
         )
 
+        self.assertEqual(
+            DirectMessageReceiptDecision.objects.count(),
+            0,
+        )
+
+    def test_normal_direct_message_creates_no_receipt_decision_row(self):
+        self.authenticate_as("1")
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
+        self.assertEqual(Message.objects.count(), 1)
+        self.assertEqual(
+            DirectMessageReceiptDecision.objects.count(),
+            0,
+        )
+
+    def test_ghosted_direct_message_creates_exceptional_receipt_decision_row(self):
+        ContactDeliveryPolicy.objects.create(
+            owner_user_id="2",
+            target_user_id="1",
+            is_blocked=False,
+            ghost_until=timezone.now() + timedelta(hours=24),
+            ghost_permanent=False,
+            ghost_duration_option="24h",
+            policy_version=2,
+        )
+
+        self.authenticate_as("1")
+
+        response = self.client.post(
+            self.url,
+            self.valid_payload(),
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
+
+        message = Message.objects.get()
+        decision = DirectMessageReceiptDecision.objects.get(
+            message=message,
+        )
+
+        self.assertEqual(
+            decision.policy_reason,
+            DirectMessageReceiptDecision.PolicyReason.GHOST,
+        )
+        self.assertTrue(decision.suppress_delivered_receipt)
+        self.assertTrue(decision.suppress_read_receipt)
+        self.assertEqual(decision.policy_version, 2)
+
     def test_exact_retry_is_idempotent(self):
         self.authenticate_as("1")
         payload = self.valid_payload()
@@ -333,6 +404,36 @@ class DirectMessageSendingAPITests(APITestCase):
             },
         )
         self.assert_nothing_stored()
+
+    
+
+    def test_cached_active_devices_still_require_missing_envelopes(self):
+        get_active_device_ids_for_user("1")
+        get_active_device_ids_for_user("2")
+
+        self.authenticate_as("1")
+        payload = self.valid_payload()
+        payload["envelopes"] = [
+            payload["envelopes"][0],
+        ]
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn(
+            str(self.recipient_device_id),
+            response.json()["message"],
+        )
+        self.assert_nothing_stored()
+
+
 
     def test_missing_recipient_device_envelope_is_rejected(self):
         self.authenticate_as("1")
@@ -507,6 +608,125 @@ class DirectMessageSendingAPITests(APITestCase):
         self.assertEqual(RoomMember.objects.count(), 2)
         self.assertEqual(Message.objects.count(), 2)
         self.assertEqual(MessageKeyEnvelope.objects.count(), 4)
+
+    
+
+    def test_existing_room_send_updates_room_timestamp_with_lightweight_update(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        old_updated_at = timezone.now() - timedelta(days=1)
+        Room.objects.filter(id=room.id).update(
+            updated_at=old_updated_at,
+        )
+
+        payload = self.valid_payload(
+            client_message_id=uuid.UUID(
+                "77777777-7777-4777-8777-777777777777"
+            ),
+            encrypted_payload="ROOM_TIMESTAMP_UPDATE_CIPHERTEXT",
+        )
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+        payload["encryption_metadata"]["nonce"] = (
+            "ROOM_TIMESTAMP_UPDATE_NONCE"
+        )
+        payload["envelopes"][0]["session_reference"] = (
+            "timestamp-update-sender-sync-session"
+        )
+        payload["envelopes"][1]["session_reference"] = (
+            "timestamp-update-recipient-ratchet-session"
+        )
+        payload["envelopes"][1]["key_wrap_metadata"][
+            "message_number"
+        ] = 7
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
+
+        room.refresh_from_db()
+        self.assertGreater(
+            room.updated_at,
+            old_updated_at,
+        )
+
+    def test_failed_existing_room_send_does_not_update_room_timestamp(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        old_updated_at = timezone.now() - timedelta(days=1)
+        Room.objects.filter(id=room.id).update(
+            updated_at=old_updated_at,
+        )
+
+        payload = self.valid_payload(
+            client_message_id=uuid.UUID(
+                "88888888-8888-4888-8888-888888888888"
+            ),
+            encrypted_payload="FAILED_ROOM_TIMESTAMP_CIPHERTEXT",
+        )
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+        payload["envelopes"] = [
+            payload["envelopes"][0],
+        ]
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        room.refresh_from_db()
+        self.assertEqual(
+            room.updated_at,
+            old_updated_at,
+        )
+        self.assertEqual(Message.objects.count(), 0)
+
+
 
     def test_raw_recipient_user_id_is_rejected(self):
         self.authenticate_as("1")
@@ -751,6 +971,16 @@ class DirectMessageSendingAPITests(APITestCase):
             MessageKeyEnvelope.Protocol.DEVICE_SYNC,
         )
 
+        decision = DirectMessageReceiptDecision.objects.get(
+            message=message,
+        )
+        self.assertEqual(
+            decision.policy_reason,
+            DirectMessageReceiptDecision.PolicyReason.BLOCKED,
+        )
+        self.assertFalse(decision.suppress_delivered_receipt)
+        self.assertFalse(decision.suppress_read_receipt)
+
     def test_blocker_can_still_send_to_blocked_contact(self):
         """
         Directional block rule:
@@ -851,6 +1081,175 @@ class DirectMessageSendingAPITests(APITestCase):
                 self.recipient_device_id,
             },
         )
+
+
+    
+    def test_existing_room_id_send_uses_local_resolution_without_identity_lookup(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        self.mock_resolve_contact.side_effect = IdentityClientError(
+            "Identity service should not be called for room_id sends."
+        )
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.assertEqual(
+            response.json()["data"]["room_id"],
+            str(room.id),
+        )
+        self.mock_resolve_contact.assert_not_called()
+        self.assertEqual(Message.objects.filter(room=room).count(), 1)
+
+
+
+    def test_room_id_send_rejects_unknown_room(self):
+        self.authenticate_as("1")
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(uuid.uuid4())
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            response.json(),
+            {
+                "success": False,
+                "message": "Direct room is unavailable.",
+            },
+        )
+        self.mock_resolve_contact.assert_not_called()
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
+
+    def test_room_id_send_rejects_direct_room_with_extra_active_member(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="3",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            response.json(),
+            {
+                "success": False,
+                "message": "Direct room is unavailable.",
+            },
+        )
+        self.mock_resolve_contact.assert_not_called()
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
+
+    def test_room_id_send_rejects_direct_room_pair_key_mismatch(self):
+        self.authenticate_as("1")
+
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "3"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        payload = self.valid_payload()
+        payload.pop("recipient_contact_id")
+        payload["room_id"] = str(room.id)
+
+        response = self.client.post(
+            self.url,
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(
+            response.json(),
+            {
+                "success": False,
+                "message": "Direct room is unavailable.",
+            },
+        )
+        self.mock_resolve_contact.assert_not_called()
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
 
     def test_room_id_send_requires_active_membership(self):
         self.authenticate_as("3")

@@ -1,4 +1,6 @@
 import hashlib
+import os
+import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -6,11 +8,18 @@ from apps.group_chat.models import GroupEncryptionEpoch
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
-from .policy_services import get_delivery_policy_snapshot
+from .policy_services import (
+    DeliveryPolicySnapshot,
+    get_delivery_policy_snapshot,
+    sender_has_saved_direct_contact,
+)
 from apps.e2ee_devices.models import Device
+from apps.e2ee_devices.services import get_active_device_user_ids_by_id
 from apps.rooms.models import Room, RoomMember
 
+
 from .models import (
+    DirectContactState,
     DirectMessageReceiptDecision,
     Message,
     MessageKeyEnvelope,
@@ -43,6 +52,11 @@ class DirectRoomUnavailableError(DirectMessageServiceError):
     """Raised when an existing direct room cannot be used."""
 
 
+class SavedContactRequiredError(DirectMessageServiceError):
+    """
+    Raised when the sender tries to send to a user they have not saved.
+    """
+
 class IdempotencyConflictError(DirectMessageServiceError):
     """
     Raised when a client_message_id is reused with different content.
@@ -57,6 +71,9 @@ class DirectMessageResult:
     message_created: bool
     envelope_count: int
     recipient_delivery_blocked: bool = False
+    recipient_device_ids: tuple[str, ...] = ()
+    realtime_event_payload: dict[str, Any] | None = None
+    profile_timings_ms: dict[str, float] | None = None
 
 @dataclass(frozen=True, slots=True)
 class RoomListItem:
@@ -98,6 +115,124 @@ def build_direct_pair_key(
     return hashlib.sha256(
         normalized_pair.encode("utf-8")
     ).hexdigest()
+
+
+def direct_send_profile_enabled() -> bool:
+    return os.getenv(
+        "MYNA_PROFILE_DIRECT_SEND",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def profile_checkpoint(
+    timings: dict[str, float] | None,
+    name: str,
+    started_at: float,
+) -> None:
+    if timings is not None:
+        timings[name] = round(
+            (time.perf_counter() - started_at) * 1000,
+            2,
+        )
+
+
+
+def resolve_existing_direct_room_recipient(
+    *,
+    authenticated_user_id: str,
+    room_id: Any,
+) -> tuple[Room, str]:
+    """
+    Resolve the recipient for an existing direct room using only the
+    hot-path columns required for validation and sending.
+
+    This avoids the identity-service saved-contact lookup and avoids
+    prefetching full RoomMember model objects when the request already
+    contains a trusted existing room_id.
+    """
+
+    sender_id = str(authenticated_user_id).strip()
+
+    if not sender_id:
+        raise DirectRoomUnavailableError(
+            "Direct room is unavailable."
+        )
+
+    room = (
+        Room.objects.only(
+            "id",
+            "room_type",
+            "is_active",
+            "direct_pair_key",
+            "created_at",
+            "updated_at",
+        )
+        .filter(
+            id=room_id,
+            room_type=Room.RoomType.DIRECT,
+            is_active=True,
+        )
+        .first()
+    )
+
+    if room is None:
+        raise DirectRoomUnavailableError(
+            "Direct room is unavailable."
+        )
+
+    active_member_user_ids = list(
+        RoomMember.objects.filter(
+            room_id=room.id,
+            is_active=True,
+        )
+        .order_by(
+            "joined_at",
+            "id",
+        )
+        .values_list(
+            "user_id",
+            flat=True,
+        )
+    )
+
+    if (
+        len(active_member_user_ids) != 2
+        or sender_id not in active_member_user_ids
+    ):
+        raise DirectRoomUnavailableError(
+            "Direct room is unavailable."
+        )
+
+    recipient_user_id = next(
+        user_id
+        for user_id in active_member_user_ids
+        if user_id != sender_id
+    )
+
+    if (
+        room.direct_pair_key
+        != build_direct_pair_key(
+            sender_id,
+            recipient_user_id,
+        )
+    ):
+        raise DirectRoomUnavailableError(
+            "Direct room is unavailable."
+        )
+
+    room.active_members = tuple(
+        RoomMember(
+            room_id=room.id,
+            user_id=user_id,
+            is_active=True,
+        )
+        for user_id in active_member_user_ids
+    )
+
+    return room, str(recipient_user_id)
+
+
+
 
 
 def _normalize_uuid(
@@ -323,6 +458,7 @@ def _validate_existing_direct_room(
     room: Room,
     sender_user_id: str,
     recipient_user_id: str,
+    expected_pair_key: str | None = None,
 ) -> None:
     if room.room_type != "direct":
         raise DirectRoomUnavailableError(
@@ -334,18 +470,42 @@ def _validate_existing_direct_room(
             "The direct room is inactive."
         )
 
-    active_members = set(
-        room.members.filter(
-            is_active=True,
-            user_id__in=[
+    if (
+        expected_pair_key is not None
+        and room.direct_pair_key != expected_pair_key
+    ):
+        raise DirectRoomUnavailableError(
+            "The direct room does not match the sender and recipient."
+        )
+
+    prefetched_members = getattr(
+        room,
+        "active_members",
+        None,
+    )
+
+    if prefetched_members is not None:
+        active_members = {
+            member.user_id
+            for member in prefetched_members
+            if member.user_id in {
                 sender_user_id,
                 recipient_user_id,
-            ],
-        ).values_list(
-            "user_id",
-            flat=True,
+            }
+        }
+    else:
+        active_members = set(
+            room.members.filter(
+                is_active=True,
+                user_id__in=[
+                    sender_user_id,
+                    recipient_user_id,
+                ],
+            ).values_list(
+                "user_id",
+                flat=True,
+            )
         )
-    )
 
     expected_members = {
         sender_user_id,
@@ -376,6 +536,7 @@ def _get_or_create_direct_room(
             room=room,
             sender_user_id=sender_user_id,
             recipient_user_id=recipient_user_id,
+            expected_pair_key=pair_key,
         )
 
         return room, False
@@ -428,10 +589,10 @@ def _get_or_create_direct_room(
             room=room,
             sender_user_id=sender_user_id,
             recipient_user_id=recipient_user_id,
+            expected_pair_key=pair_key,
         )
 
         return room, False
-
 
 def _resolve_and_validate_envelope_devices(
     *,
@@ -439,46 +600,34 @@ def _resolve_and_validate_envelope_devices(
     recipient_user_id: str,
     sender_device_id: UUID,
     envelopes: list[dict[str, Any]],
-) -> dict[str, Device]:
-    active_devices = list(
-        Device.objects
-        .select_for_update()
-        .filter(
-            user_id__in=[
-                sender_user_id,
-                recipient_user_id,
-            ],
-            is_active=True,
+) -> dict[str, str]:
+    devices_by_id = get_active_device_user_ids_by_id(
+        user_ids=(
+            sender_user_id,
+            recipient_user_id,
         )
-        .order_by("user_id", "created_at", "id")
     )
 
-    devices_by_id = {
-        str(device.id): device
-        for device in active_devices
-    }
-
-    sender_device = devices_by_id.get(
+    sender_device_user_id = devices_by_id.get(
         str(sender_device_id)
     )
 
-    if sender_device is None:
+    if sender_device_user_id is None:
         raise DirectMessageValidationError(
             "The sender device is not registered or is inactive."
         )
 
-    if sender_device.user_id != sender_user_id:
+    if sender_device_user_id != sender_user_id:
         raise DirectMessageValidationError(
             "The sender device does not belong to the "
             "authenticated sender."
         )
 
     recipient_devices = {
-        str(device.id)
-        for device in active_devices
-        if device.user_id == recipient_user_id
+        device_id
+        for device_id, device_user_id in devices_by_id.items()
+        if device_user_id == recipient_user_id
     }
-
     if not recipient_devices:
         raise DirectMessageValidationError(
             "The recipient has no active E2EE devices."
@@ -515,11 +664,10 @@ def _resolve_and_validate_envelope_devices(
         )
 
     for item in envelopes:
-        device = devices_by_id[
-            str(item["recipient_device_id"])
-        ]
+        device_id = str(item["recipient_device_id"])
+        device_user_id = devices_by_id[device_id]
 
-        if device.user_id == sender_user_id:
+        if device_user_id == sender_user_id:
             expected_protocol = (
                 MessageKeyEnvelope.Protocol.DEVICE_SYNC
             )
@@ -530,10 +678,9 @@ def _resolve_and_validate_envelope_devices(
 
         if item["protocol"] != expected_protocol:
             raise DirectMessageValidationError(
-                f"Device {device.id} must use the "
+                f"Device {device_id} must use the "
                 f"{expected_protocol} envelope protocol."
             )
-
     return devices_by_id
 
 
@@ -566,12 +713,104 @@ def _message_has_recipient_delivery(
     )
 
 
+def _return_existing_idempotent_direct_message(
+    *,
+    sender_id: str,
+    recipient_id: str,
+    pair_key: str,
+    normalized_client_message_id: UUID,
+    normalized_sender_device_id: UUID,
+    normalized_message_type: str,
+    normalized_encrypted_payload: str,
+    encryption_metadata: dict[str, Any],
+    normalized_encryption_version: int,
+    normalized_reply_to_id: UUID | None,
+    client_sent_at: Any,
+    normalized_envelopes: list[dict[str, Any]],
+    attachment_ids: list[Any] | None,
+    profile_timings_ms: dict[str, float] | None = None,
+) -> DirectMessageResult:
+    existing_message = (
+        _find_existing_idempotent_message(
+            sender_user_id=sender_id,
+            client_message_id=(
+                normalized_client_message_id
+            ),
+        )
+    )
+
+    if existing_message is None:
+        raise IntegrityError(
+            "Message insert failed but no idempotent message was found."
+        )
+
+    existing_has_recipient_delivery = (
+        _message_has_recipient_delivery(
+            message=existing_message,
+            recipient_user_id=recipient_id,
+        )
+    )
+
+    effective_existing_envelopes = (
+        normalized_envelopes
+        if existing_has_recipient_delivery
+        else _filter_envelopes_to_stored_devices(
+            message=existing_message,
+            envelopes=normalized_envelopes,
+        )
+    )
+
+    _validate_existing_idempotent_message(
+        message=existing_message,
+        expected_pair_key=pair_key,
+        sender_device_id=(
+            normalized_sender_device_id
+        ),
+        message_type=normalized_message_type,
+        encrypted_payload=(
+            normalized_encrypted_payload
+        ),
+        encryption_metadata=encryption_metadata,
+        encryption_version=(
+            normalized_encryption_version
+        ),
+        reply_to_id=normalized_reply_to_id,
+        client_sent_at=client_sent_at,
+        envelopes=effective_existing_envelopes,
+    )
+
+    try:
+        validate_idempotent_message_attachments(
+            message=existing_message,
+            attachment_ids=attachment_ids,
+        )
+    except AttachmentConflictError as error:
+        raise IdempotencyConflictError(str(error)) from error
+    except (
+        AttachmentValidationError,
+        AttachmentNotFoundError,
+        AttachmentPermissionError,
+    ) as error:
+        raise DirectMessageValidationError(str(error)) from error
+
+    return DirectMessageResult(
+        room=existing_message.room,
+        message=existing_message,
+        room_created=False,
+        message_created=False,
+        envelope_count=len(existing_message.key_envelopes.all()),
+        recipient_delivery_blocked=(
+            not existing_has_recipient_delivery
+        ),
+        profile_timings_ms=profile_timings_ms,
+    )
+
 def _resolve_and_validate_sender_only_envelope_devices(
     *,
     sender_user_id: str,
     sender_device_id: UUID,
     envelopes: list[dict[str, Any]],
-) -> tuple[dict[str, Device], list[dict[str, Any]]]:
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """
     Used when recipient has blocked sender.
 
@@ -580,30 +819,18 @@ def _resolve_and_validate_sender_only_envelope_devices(
     sender device-sync envelopes.
     """
 
-    active_sender_devices = list(
-        Device.objects
-        .select_for_update()
-        .filter(
-            user_id=sender_user_id,
-            is_active=True,
-        )
-        .order_by("created_at", "id")
+    devices_by_id = get_active_device_user_ids_by_id(
+        user_ids=(sender_user_id,)
     )
 
-    devices_by_id = {
-        str(device.id): device
-        for device in active_sender_devices
-    }
-
-    sender_device = devices_by_id.get(
+    sender_device_user_id = devices_by_id.get(
         str(sender_device_id)
     )
 
-    if sender_device is None:
+    if sender_device_user_id is None:
         raise DirectMessageValidationError(
             "The sender device is not registered or is inactive."
         )
-
     provided_device_ids = {
         str(item["recipient_device_id"])
         for item in envelopes
@@ -667,6 +894,84 @@ def _resolve_reply_message(
 
 
 
+
+def _upsert_sender_saved_contact_state_from_identity(
+    *,
+    room: Room,
+    sender_user_id: str,
+    recipient_user_id: str,
+    identity_contact_id: Any = None,
+) -> None:
+    """
+    Create or repair DirectContactState after Identity has already confirmed
+    recipient_contact_id belongs to the authenticated sender.
+
+    This is used for the recipient_contact_id send path.
+
+    It must not be used for room_id sends, because room_id sends should not
+    call Identity.
+    """
+
+    normalized_identity_contact_id = None
+
+    if identity_contact_id is not None:
+        try:
+            normalized_identity_contact_id = int(identity_contact_id)
+        except (TypeError, ValueError) as error:
+            raise DirectMessageValidationError(
+                "identity_contact_id is invalid."
+            ) from error
+
+        if normalized_identity_contact_id < 1:
+            raise DirectMessageValidationError(
+                "identity_contact_id must be greater than zero."
+            )
+
+    contact_state = (
+        DirectContactState.objects
+        .select_for_update()
+        .filter(
+            owner_user_id=sender_user_id,
+            contact_user_id=recipient_user_id,
+        )
+        .first()
+    )
+
+    created = contact_state is None
+
+    if contact_state is None:
+        contact_state = DirectContactState(
+            room=room,
+            owner_user_id=sender_user_id,
+            contact_user_id=recipient_user_id,
+        )
+
+    changed = (
+        created
+        or contact_state.room_id != room.id
+        or contact_state.is_saved is not True
+        or (
+            normalized_identity_contact_id is not None
+            and contact_state.identity_contact_id
+            != normalized_identity_contact_id
+        )
+    )
+
+    contact_state.room = room
+    contact_state.is_saved = True
+
+    if normalized_identity_contact_id is not None:
+        contact_state.identity_contact_id = normalized_identity_contact_id
+
+    if changed:
+        contact_state.full_clean()
+        contact_state.save()
+
+
+
+
+
+
 @transaction.atomic
 def send_direct_message(
     *,
@@ -682,7 +987,16 @@ def send_direct_message(
     reply_to_id: Any = None,
     client_sent_at: Any = None,
     attachment_ids: list[Any] | None = None,
+    sender_contact_validated_by_identity: bool = False,
+    identity_contact_id: Any = None,
+    existing_room: Room | None = None,
+    delivery_policy_snapshot: DeliveryPolicySnapshot | None = None,
+    require_saved_contact: bool = False,
+    profile_timings_ms: dict[str, float] | None = None,
 ) -> DirectMessageResult:
+    total_started_at = time.perf_counter()
+    phase_started_at = time.perf_counter()
+
     sender_id = str(sender_user_id).strip()
     recipient_id = str(recipient_user_id).strip()
 
@@ -766,11 +1080,42 @@ def send_direct_message(
     normalized_envelopes = _normalize_envelopes(
         envelopes
     )
-
-    delivery_policy_snapshot = get_delivery_policy_snapshot(
-        recipient_user_id=recipient_id,
-        sender_user_id=sender_id,
+    profile_checkpoint(
+        profile_timings_ms,
+        "service_validate_input",
+        phase_started_at,
     )
+
+    if delivery_policy_snapshot is None:
+        phase_started_at = time.perf_counter()
+        delivery_policy_snapshot = get_delivery_policy_snapshot(
+            recipient_user_id=recipient_id,
+            sender_user_id=sender_id,
+        )
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_policy_snapshot",
+            phase_started_at,
+        )
+    else:
+        profile_timings_ms and profile_timings_ms.setdefault(
+            "service_policy_snapshot",
+            0.0,
+        )
+
+    if existing_room is not None:
+        phase_started_at = time.perf_counter()
+        _validate_existing_direct_room(
+            room=existing_room,
+            sender_user_id=sender_id,
+            recipient_user_id=recipient_id,
+            expected_pair_key=pair_key,
+        )
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_existing_room_validation",
+            phase_started_at,
+        )
 
     recipient_delivery_blocked = (
         delivery_policy_snapshot.is_blocked
@@ -781,81 +1126,23 @@ def send_direct_message(
         and not recipient_delivery_blocked
     )
 
-    existing_message = (
-        _find_existing_idempotent_message(
+    if (
+        existing_room is None
+        and
+        require_saved_contact
+        and
+        not sender_contact_validated_by_identity
+        and not sender_has_saved_direct_contact(
             sender_user_id=sender_id,
-            client_message_id=(
-                normalized_client_message_id
-            ),
+            recipient_user_id=recipient_id,
         )
-    )
-
-    if existing_message is not None:
-        existing_has_recipient_delivery = (
-            _message_has_recipient_delivery(
-                message=existing_message,
-                recipient_user_id=recipient_id,
-            )
-        )
-
-        effective_existing_envelopes = (
-            normalized_envelopes
-            if existing_has_recipient_delivery
-            else _filter_envelopes_to_stored_devices(
-                message=existing_message,
-                envelopes=normalized_envelopes,
-            )
-        )
-
-        _validate_existing_idempotent_message(
-            message=existing_message,
-            expected_pair_key=pair_key,
-            sender_device_id=(
-                normalized_sender_device_id
-            ),
-            message_type=normalized_message_type,
-            encrypted_payload=(
-                normalized_encrypted_payload
-            ),
-            encryption_metadata=encryption_metadata,
-            encryption_version=(
-                normalized_encryption_version
-            ),
-            reply_to_id=normalized_reply_to_id,
-            client_sent_at=client_sent_at,
-            envelopes=effective_existing_envelopes,
-        )
-
-        try:
-            validate_idempotent_message_attachments(
-                message=existing_message,
-                attachment_ids=attachment_ids,
-            )
-        except AttachmentConflictError as error:
-            raise IdempotencyConflictError(str(error)) from error
-        except (
-            AttachmentValidationError,
-            AttachmentNotFoundError,
-            AttachmentPermissionError,
-        ) as error:
-            raise DirectMessageValidationError(str(error)) from error
-
-
-
-        return DirectMessageResult(
-            room=existing_message.room,
-            message=existing_message,
-            room_created=False,
-            message_created=False,
-            envelope_count=(
-                existing_message.key_envelopes.count()
-            ),
-            recipient_delivery_blocked=(
-                not existing_has_recipient_delivery
-            ),
+    ):
+        raise SavedContactRequiredError(
+            "Save this contact before sending a message."
         )
 
     try:
+        phase_started_at = time.perf_counter()
         if recipient_delivery_blocked:
             devices_by_id, effective_envelopes = (
                 _resolve_and_validate_sender_only_envelope_devices(
@@ -878,18 +1165,53 @@ def send_direct_message(
                 )
             )
             effective_envelopes = normalized_envelopes
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_device_lookup",
+            phase_started_at,
+        )
 
-        room, room_created = (
-            _get_or_create_direct_room(
+        phase_started_at = time.perf_counter()
+        if existing_room is not None:
+            room = existing_room
+            room_created = False
+        else:
+            room, room_created = _get_or_create_direct_room(
                 sender_user_id=sender_id,
                 recipient_user_id=recipient_id,
                 pair_key=pair_key,
             )
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_room_validation",
+            phase_started_at,
         )
 
+
+        if sender_contact_validated_by_identity:
+            phase_started_at = time.perf_counter()
+            _upsert_sender_saved_contact_state_from_identity(
+                room=room,
+                sender_user_id=sender_id,
+                recipient_user_id=recipient_id,
+                identity_contact_id=identity_contact_id,
+            )
+            profile_checkpoint(
+                profile_timings_ms,
+                "service_contact_state_upsert",
+                phase_started_at,
+            )
+
+
+        phase_started_at = time.perf_counter()
         reply_message = _resolve_reply_message(
             room=room,
             reply_to_id=normalized_reply_to_id,
+        )
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_reply_lookup",
+            phase_started_at,
         )
 
         message = Message(
@@ -915,90 +1237,149 @@ def send_direct_message(
             client_sent_at=client_sent_at,
         )
 
-        message.full_clean()
-        message.save(force_insert=True)
-
         try:
-            validate_and_attach_message_attachments(
-                authenticated_user_id=sender_id,
-                sender_device_id=normalized_sender_device_id,
-                room=room,
-                message=message,
-                attachment_ids=attachment_ids,
+            with transaction.atomic():
+                phase_started_at = time.perf_counter()
+                message.save(force_insert=True)
+                profile_checkpoint(
+                    profile_timings_ms,
+                    "service_message_insert",
+                    phase_started_at,
+                )
+        except IntegrityError:
+            profile_checkpoint(
+                profile_timings_ms,
+                "service_total",
+                total_started_at,
             )
-        except AttachmentConflictError as error:
-            raise IdempotencyConflictError(str(error)) from error
-        except (
-            AttachmentValidationError,
-            AttachmentNotFoundError,
-            AttachmentPermissionError,
-        ) as error:
-            raise DirectMessageValidationError(str(error)) from error
+            return _return_existing_idempotent_direct_message(
+                sender_id=sender_id,
+                recipient_id=recipient_id,
+                pair_key=pair_key,
+                normalized_client_message_id=(
+                    normalized_client_message_id
+                ),
+                normalized_sender_device_id=(
+                    normalized_sender_device_id
+                ),
+                normalized_message_type=normalized_message_type,
+                normalized_encrypted_payload=(
+                    normalized_encrypted_payload
+                ),
+                encryption_metadata=encryption_metadata,
+                normalized_encryption_version=(
+                    normalized_encryption_version
+                ),
+                normalized_reply_to_id=normalized_reply_to_id,
+                client_sent_at=client_sent_at,
+                normalized_envelopes=normalized_envelopes,
+                attachment_ids=attachment_ids,
+                profile_timings_ms=profile_timings_ms,
+            )
+
+        if attachment_ids:
+            try:
+                phase_started_at = time.perf_counter()
+                validate_and_attach_message_attachments(
+                    authenticated_user_id=sender_id,
+                    sender_device_id=normalized_sender_device_id,
+                    room=room,
+                    message=message,
+                    attachment_ids=attachment_ids,
+                )
+                profile_checkpoint(
+                    profile_timings_ms,
+                    "service_attachment_validation",
+                    phase_started_at,
+                )
+            except AttachmentConflictError as error:
+                raise IdempotencyConflictError(str(error)) from error
+            except (
+                AttachmentValidationError,
+                AttachmentNotFoundError,
+                AttachmentPermissionError,
+            ) as error:
+                raise DirectMessageValidationError(str(error)) from error
 
 
 
         envelope_models = []
 
         for item in effective_envelopes:
-            device = devices_by_id[
+            device_user_id = devices_by_id[
                 str(item["recipient_device_id"])
             ]
 
             envelope = MessageKeyEnvelope(
                 message=message,
                 recipient_device_id=item["recipient_device_id"],
-                recipient_user_id=device.user_id,
+                recipient_user_id=device_user_id,
                 protocol=item["protocol"],
                 session_reference=item["session_reference"],
                 wrapped_message_key=item["wrapped_message_key"],
                 key_wrap_metadata=item["key_wrap_metadata"],
                 envelope_version=item["envelope_version"],
             )
-            envelope.full_clean()
             envelope_models.append(envelope)
 
+        phase_started_at = time.perf_counter()
         MessageKeyEnvelope.objects.bulk_create(
             envelope_models
         )
-
-        if recipient_delivery_blocked:
-            policy_reason = (
-                DirectMessageReceiptDecision.PolicyReason.BLOCKED
-            )
-        elif recipient_ghosting_sender:
-            policy_reason = (
-                DirectMessageReceiptDecision.PolicyReason.GHOST
-            )
-        else:
-            policy_reason = (
-                DirectMessageReceiptDecision.PolicyReason.NORMAL
-            )
-
-        receipt_decision = DirectMessageReceiptDecision(
-            message=message,
-            sender_user_id=sender_id,
-            recipient_user_id=recipient_id,
-            suppress_delivered_receipt=(
-                recipient_ghosting_sender
-            ),
-            suppress_read_receipt=(
-                recipient_ghosting_sender
-            ),
-            policy_reason=policy_reason,
-            policy_version=(
-                delivery_policy_snapshot.policy_version
-            ),
-        )
-        receipt_decision.full_clean()
-        receipt_decision.save()
-
-        room.updated_at = timezone.now()
-        room.save(
-            update_fields=[
-                "updated_at",
-            ]
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_key_envelope_bulk_insert",
+            phase_started_at,
         )
 
+        if recipient_delivery_blocked or recipient_ghosting_sender:
+            if recipient_delivery_blocked:
+                policy_reason = (
+                    DirectMessageReceiptDecision.PolicyReason.BLOCKED
+                )
+            else:
+                policy_reason = (
+                    DirectMessageReceiptDecision.PolicyReason.GHOST
+                )
+
+            phase_started_at = time.perf_counter()
+            DirectMessageReceiptDecision.objects.create(
+                message=message,
+                sender_user_id=sender_id,
+                recipient_user_id=recipient_id,
+                suppress_delivered_receipt=(
+                    recipient_ghosting_sender
+                ),
+                suppress_read_receipt=(
+                    recipient_ghosting_sender
+                ),
+                policy_reason=policy_reason,
+                policy_version=(
+                    delivery_policy_snapshot.policy_version
+                ),
+            )
+            profile_checkpoint(
+                profile_timings_ms,
+                "service_receipt_decision_insert",
+                phase_started_at,
+            )
+        elif profile_timings_ms is not None:
+            profile_timings_ms["service_receipt_decision_insert"] = 0.0
+
+        room_updated_at = timezone.now()
+        phase_started_at = time.perf_counter()
+        Room.objects.filter(
+            id=room.id,
+        ).update(
+            updated_at=room_updated_at,
+        )
+        room.updated_at = room_updated_at
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_room_update",
+            phase_started_at,
+        )
+        
     except ValidationError as error:
         raise DirectMessageValidationError(
             error.message_dict
@@ -1006,80 +1387,19 @@ def send_direct_message(
             else error.messages
         ) from error
 
-    except IntegrityError:
-        existing_message = (
-            _find_existing_idempotent_message(
-                sender_user_id=sender_id,
-                client_message_id=(
-                    normalized_client_message_id
-                ),
-            )
+    recipient_device_ids = tuple(
+        sorted(
+            str(envelope.recipient_device_id)
+            for envelope in envelope_models
+            if envelope.recipient_user_id == recipient_id
         )
+    )
 
-        if existing_message is None:
-            raise
-
-        existing_has_recipient_delivery = (
-            _message_has_recipient_delivery(
-                message=existing_message,
-                recipient_user_id=recipient_id,
-            )
-        )
-
-        effective_existing_envelopes = (
-            normalized_envelopes
-            if existing_has_recipient_delivery
-            else _filter_envelopes_to_stored_devices(
-                message=existing_message,
-                envelopes=normalized_envelopes,
-            )
-        )
-
-        _validate_existing_idempotent_message(
-            message=existing_message,
-            expected_pair_key=pair_key,
-            sender_device_id=(
-                normalized_sender_device_id
-            ),
-            message_type=normalized_message_type,
-            encrypted_payload=(
-                normalized_encrypted_payload
-            ),
-            encryption_metadata=encryption_metadata,
-            encryption_version=(
-                normalized_encryption_version
-            ),
-            reply_to_id=normalized_reply_to_id,
-            client_sent_at=client_sent_at,
-            envelopes=effective_existing_envelopes,
-        )
-
-        try:
-            validate_idempotent_message_attachments(
-                message=existing_message,
-                attachment_ids=attachment_ids,
-            )
-        except AttachmentConflictError as error:
-            raise IdempotencyConflictError(str(error)) from error
-        except (
-            AttachmentValidationError,
-            AttachmentNotFoundError,
-            AttachmentPermissionError,
-        ) as error:
-            raise DirectMessageValidationError(str(error)) from error
-
-        return DirectMessageResult(
-            room=existing_message.room,
-            message=existing_message,
-            room_created=False,
-            message_created=False,
-            envelope_count=(
-                existing_message.key_envelopes.count()
-            ),
-            recipient_delivery_blocked=(
-                not existing_has_recipient_delivery
-            ),
-        )
+    profile_checkpoint(
+        profile_timings_ms,
+        "service_total",
+        total_started_at,
+    )
 
     return DirectMessageResult(
         room=room,
@@ -1088,6 +1408,16 @@ def send_direct_message(
         message_created=True,
         envelope_count=len(envelope_models),
         recipient_delivery_blocked=recipient_delivery_blocked,
+        recipient_device_ids=recipient_device_ids,
+        realtime_event_payload={
+            "room_id": str(room.id),
+            "message_id": str(message.id),
+            "client_message_id": str(message.client_message_id),
+            "sender_user_id": str(message.sender_user_id),
+            "message_type": message.message_type,
+            "requires_fetch": True,
+        },
+        profile_timings_ms=profile_timings_ms,
     )
 
 

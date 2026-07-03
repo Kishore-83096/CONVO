@@ -1,4 +1,4 @@
-from flask import Blueprint, request
+from flask import Blueprint, request,current_app
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 
 from app.contacts.schemas import (
@@ -57,7 +57,7 @@ def json_request_body() -> dict:
 
 
 @contacts_blueprint.post("/search")
-@limiter.limit("20 per minute")
+@limiter.limit(lambda: current_app.config["CONTACT_ADD_RATE_LIMIT"])
 def search():
     payload = search_schema.load(json_request_body())
     user, is_own_contact = search_contact(current_user_id(), payload)
@@ -75,7 +75,7 @@ def search():
 
 
 @contacts_blueprint.post("")
-@limiter.limit("20 per minute")
+@limiter.limit(lambda: current_app.config["CONTACT_ADD_RATE_LIMIT"])
 def create():
     payload = add_schema.load(json_request_body())
     contact = add_contact(current_user_id(), payload)
