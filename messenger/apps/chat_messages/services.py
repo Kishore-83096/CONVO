@@ -45,11 +45,14 @@ from apps.realtime.events import (
     MESSAGE_STORED,
     build_event,
 )
+
 from apps.realtime.outbox import (
     RealtimeOutboxCreateSpec,
     build_direct_message_stored_event_key,
-    enqueue_realtime_outbox_events_sync,
+    enqueue_new_realtime_outbox_events_sync,
 )
+
+
 from apps.realtime.publishers import make_device_group_name
 
 
@@ -1178,7 +1181,7 @@ def _upsert_sender_saved_contact_state_from_identity(
 
 
 
-@transaction.atomic
+@transaction.atomic(savepoint=False)
 def send_direct_message(
     *,
     sender_user_id: Any,
@@ -1633,10 +1636,10 @@ def send_direct_message(
                     )
 
                 realtime_outbox_event_count = (
-                    enqueue_realtime_outbox_events_sync(
+                    enqueue_new_realtime_outbox_events_sync(
                         outbox_events,
                     )
-                )
+               )
 
         profile_checkpoint(
             profile_timings_ms,

@@ -182,6 +182,85 @@ def enqueue_realtime_outbox_events_sync(
     return created_count
 
 
+
+
+def enqueue_new_realtime_outbox_events_sync(
+    events: Iterable[RealtimeOutboxCreateSpec],
+) -> int:
+    """
+    Bulk-persist outbox rows for a newly created parent object.
+
+    This fast path is intentionally for call sites that already proved the
+    parent object was newly inserted in the same outer transaction. Duplicate
+    event keys inside the input batch are collapsed in Python; database-level
+    event_key uniqueness remains the final invariant guard.
+    """
+    outbox_models: list[RealtimeOutboxEvent] = []
+    seen_event_keys: set[str] = set()
+    next_attempt_at = timezone.now()
+
+    for spec in events:
+        normalized_event_type = str(
+            spec.event_type
+        ).strip()
+
+        normalized_target_group = str(
+            spec.target_group
+        ).strip()
+
+        if (
+            not normalized_event_type
+            or not normalized_target_group
+        ):
+            raise ValueError(
+                "event_type and target_group are required."
+            )
+
+        normalized_event_key = (
+            build_realtime_outbox_event_key(
+                event_type=normalized_event_type,
+                target_group=normalized_target_group,
+                payload=spec.payload,
+                event_key=spec.event_key,
+            )
+        )
+
+        if normalized_event_key in seen_event_keys:
+            continue
+
+        seen_event_keys.add(
+            normalized_event_key
+        )
+
+        outbox_models.append(
+            RealtimeOutboxEvent(
+                event_type=normalized_event_type,
+                target_group=normalized_target_group,
+                event_key=normalized_event_key,
+                payload=spec.payload,
+                status=(
+                    RealtimeOutboxEvent.Status.PENDING
+                ),
+                attempts=0,
+                next_attempt_at=next_attempt_at,
+                last_error=str(
+                    spec.last_error or ""
+                )[:5000],
+            )
+        )
+
+    if not outbox_models:
+        return 0
+
+    RealtimeOutboxEvent.objects.bulk_create(
+        outbox_models
+    )
+
+    return len(outbox_models)
+
+
+    
+
 @database_sync_to_async
 def enqueue_realtime_outbox_event(
     *,

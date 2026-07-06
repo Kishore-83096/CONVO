@@ -31,7 +31,7 @@ access_logfile() {
 role="$(env_value MESSENGER_PROCESS_ROLE http)"
 port="$(env_value PORT 8000)"
 
-export ASGI_THREADS="$(env_value ASGI_THREADS 8)"
+export ASGI_THREADS="$(env_value ASGI_THREADS 12)"
 
 case "$role" in
     http)
@@ -66,7 +66,7 @@ case "$role" in
             gunicorn messenger_config.asgi:application \
             -k uvicorn_worker.UvicornWorker \
             --bind "0.0.0.0:${port}" \
-            --workers "$(env_value WEB_CONCURRENCY 4)" \
+            --workers "$(env_value WEB_CONCURRENCY 6)" \
             --backlog "$(env_value GUNICORN_BACKLOG 4096)" \
             --timeout "$(env_value GUNICORN_TIMEOUT 60)" \
             --graceful-timeout "$(env_value GUNICORN_GRACEFUL_TIMEOUT 30)" \

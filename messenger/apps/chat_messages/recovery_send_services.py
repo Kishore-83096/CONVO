@@ -7,7 +7,7 @@ from uuid import UUID
 from django.db import transaction
 from apps.e2ee_devices.models import RecoveryBundle
 from apps.e2ee_devices.recovery_services import (
-    recovery_bundle_is_active_for_user,
+    recovery_bundle_is_active_for_users,
 )
 
 from .models import MessageRecoveryEnvelope
@@ -164,13 +164,13 @@ def _validate_recovery_envelopes(
 
     return active_bundles
 
+
 def _active_recovery_bundle_exists(
     *,
     participant_ids: set[str],
 ) -> bool:
-    return any(
-        recovery_bundle_is_active_for_user(user_id)
-        for user_id in participant_ids
+    return recovery_bundle_is_active_for_users(
+        participant_ids
     )
 
 def _stored_recovery_envelopes_match(

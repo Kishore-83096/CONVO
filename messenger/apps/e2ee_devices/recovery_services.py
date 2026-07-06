@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
-
+from typing import Any, Iterable
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
@@ -55,6 +54,87 @@ def recovery_bundle_is_active_for_user(user_id: Any) -> bool:
 
     return is_active
 
+
+
+def recovery_bundle_is_active_for_users(
+    user_ids: Iterable[Any],
+) -> bool:
+    """
+    Return whether any user has active recovery using one batched cache/DB path.
+
+    Cache keys and invalidation semantics stay identical to the single-user
+    helper. On cache misses, all missing users are resolved with one query.
+    """
+    normalized_user_ids: list[str] = []
+    seen_user_ids: set[str] = set()
+
+    for user_id in user_ids:
+        normalized_user_id = str(user_id).strip()
+
+        if (
+            not normalized_user_id
+            or normalized_user_id in seen_user_ids
+        ):
+            continue
+
+        seen_user_ids.add(normalized_user_id)
+        normalized_user_ids.append(normalized_user_id)
+
+    if not normalized_user_ids:
+        return False
+
+    cache_keys_by_user_id = {
+        user_id: get_recovery_active_cache_key(user_id)
+        for user_id in normalized_user_ids
+    }
+
+    cached_values = cache.get_many(
+        cache_keys_by_user_id.values()
+    )
+
+    missing_user_ids: list[str] = []
+
+    for user_id in normalized_user_ids:
+        cached_value = cached_values.get(
+            cache_keys_by_user_id[user_id]
+        )
+
+        if isinstance(cached_value, bool):
+            if cached_value:
+                return True
+
+            continue
+
+        missing_user_ids.append(user_id)
+
+    if not missing_user_ids:
+        return False
+
+    active_user_ids = {
+        str(user_id)
+        for user_id in (
+            RecoveryBundle.objects.filter(
+                user_id__in=missing_user_ids,
+                is_active=True,
+                disabled_at__isnull=True,
+            ).values_list(
+                "user_id",
+                flat=True,
+            )
+        )
+    }
+
+    cache.set_many(
+        {
+            cache_keys_by_user_id[user_id]: (
+                user_id in active_user_ids
+            )
+            for user_id in missing_user_ids
+        },
+        RECOVERY_ACTIVE_CACHE_TTL_SECONDS,
+    )
+
+    return bool(active_user_ids)
 
 class RecoveryAlreadyConfiguredError(Exception):
     """Raised when an active recovery bundle already exists."""

@@ -144,12 +144,12 @@ def get_active_device_user_ids_by_id(
     """
     Return {device_id: owner_user_id} for active devices.
 
-    This keeps the send-message hot path cheap while preserving
-    strict envelope validation.
+    The same non-secret device-ID cache is preserved. Cache misses for all
+    requested users are resolved with one database query instead of one query
+    per user.
     """
-
-    normalized_user_ids = []
-    seen_user_ids = set()
+    normalized_user_ids: list[str] = []
+    seen_user_ids: set[str] = set()
 
     for user_id in user_ids:
         normalized_user_id = _normalize_user_id(user_id)
@@ -160,17 +160,86 @@ def get_active_device_user_ids_by_id(
         seen_user_ids.add(normalized_user_id)
         normalized_user_ids.append(normalized_user_id)
 
-    device_user_ids_by_id: dict[str, str] = {}
+    cache_keys_by_user_id = {
+        user_id: get_active_device_ids_cache_key(user_id)
+        for user_id in normalized_user_ids
+    }
 
-    for normalized_user_id in normalized_user_ids:
-        for device_id in get_active_device_ids_for_user(
-            normalized_user_id
+    cached_values = cache.get_many(
+        cache_keys_by_user_id.values()
+    )
+
+    device_ids_by_user_id: dict[str, list[str]] = {}
+    missing_user_ids: list[str] = []
+
+    for user_id in normalized_user_ids:
+        cached_value = cached_values.get(
+            cache_keys_by_user_id[user_id]
+        )
+
+        cached_device_ids = (
+            cached_value.get("device_ids")
+            if isinstance(cached_value, dict)
+            else None
+        )
+
+        if isinstance(cached_device_ids, list):
+            device_ids_by_user_id[user_id] = [
+                str(device_id)
+                for device_id in cached_device_ids
+            ]
+
+            continue
+
+        missing_user_ids.append(user_id)
+        device_ids_by_user_id[user_id] = []
+
+    if missing_user_ids:
+        for device_user_id, device_id in (
+            Device.objects.filter(
+                user_id__in=missing_user_ids,
+                is_active=True,
+            )
+            .order_by(
+                "user_id",
+                "created_at",
+                "id",
+            )
+            .values_list(
+                "user_id",
+                "id",
+            )
         ):
-            device_user_ids_by_id[str(device_id)] = (
-                normalized_user_id
+            normalized_device_user_id = str(
+                device_user_id
             )
 
+            device_ids_by_user_id[
+                normalized_device_user_id
+            ].append(
+                str(device_id)
+            )
+
+        cache.set_many(
+            {
+                cache_keys_by_user_id[user_id]: {
+                    "device_ids": (
+                        device_ids_by_user_id[user_id]
+                    ),
+                }
+                for user_id in missing_user_ids
+            },
+            ACTIVE_DEVICE_IDS_CACHE_TTL_SECONDS,
+        )
+
+    device_user_ids_by_id: dict[str, str] = {}
+
+    for user_id in normalized_user_ids:
+        for device_id in device_ids_by_user_id[user_id]:
+            device_user_ids_by_id[device_id] = user_id
+
     return device_user_ids_by_id
+
 
 def _validate_existing_device(
     *,

@@ -248,7 +248,7 @@ if [[ "$outbox_worker_enabled" == "true" ]]; then
     "${outbox_common_docker_env_args[@]}" \
     -e MESSENGER_PROCESS_ROLE=outbox \
     -e MESSENGER_HTTP_SERVER_MODE=wsgi \
-    -e DB_CONN_MAX_AGE=60 \
+    -e DB_CONN_MAX_AGE=0\
     "${outbox_override_docker_env_args[@]}" \
     "$messenger_image" >/dev/null
   sleep 2
