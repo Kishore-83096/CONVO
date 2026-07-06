@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import os
+import time
 from typing import Any, Mapping
 
 import jwt
@@ -57,6 +59,14 @@ class IdentityJWTAuthentication(BaseAuthentication):
         self,
         request,
     ) -> tuple[AuthenticatedIdentity, dict[str, Any]] | None:
+        profile_started_ns = (
+            time.perf_counter_ns()
+            if os.getenv(
+                "MYNA_PROFILE_DIRECT_SEND",
+                "false",
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            else None
+        )
         authorization_parts = get_authorization_header(
             request
         ).split()
@@ -164,6 +174,12 @@ class IdentityJWTAuthentication(BaseAuthentication):
             user_id=user_id,
             claims=claims,
         )
+
+        if profile_started_ns is not None:
+            request.META["MYNA_PROFILE_AUTH_JWT_MS"] = round(
+                (time.perf_counter_ns() - profile_started_ns) / 1_000_000,
+                2,
+            )
 
         return identity, claims
 

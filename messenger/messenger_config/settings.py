@@ -414,6 +414,17 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+if os.getenv("MYNA_BENCHMARK_ASGI_ACCESS_LOG", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    MIDDLEWARE.insert(
+        0,
+        "messenger_config.benchmark_timing.BenchmarkPreViewTimingMiddleware",
+    )
+
 
 # =============================================================================
 # URL and application configuration
@@ -465,12 +476,77 @@ DATABASES = {
     ),
 }
 
+MESSENGER_PROCESS_ROLE = env(
+    "MESSENGER_PROCESS_ROLE",
+    default="http",
+).strip().lower()
+
+if MESSENGER_PROCESS_ROLE not in {
+    "http",
+    "websocket",
+    "outbox",
+}:
+    raise ImproperlyConfigured(
+        "MESSENGER_PROCESS_ROLE must be one of: "
+        "http, websocket, outbox."
+    )
+
+MESSENGER_HTTP_SERVER_MODE = env(
+    "MESSENGER_HTTP_SERVER_MODE",
+    default="wsgi",
+).strip().lower()
+
+if MESSENGER_HTTP_SERVER_MODE not in {
+    "asgi",
+    "wsgi",
+}:
+    raise ImproperlyConfigured(
+        "MESSENGER_HTTP_SERVER_MODE must be one of: asgi, wsgi."
+    )
+
+def resolve_db_conn_max_age_default(
+    *,
+    process_role: str,
+    http_server_mode: str,
+) -> int:
+    if (
+        process_role == "http"
+        and http_server_mode == "wsgi"
+    ):
+        return 60
+
+    if process_role == "outbox":
+        return 60
+
+    return 0
+
+
+DB_CONN_MAX_AGE_EXPLICIT = "DB_CONN_MAX_AGE" in os.environ
+if DB_CONN_MAX_AGE_EXPLICIT:
+    DB_CONN_MAX_AGE_DEFAULT = env.int("DB_CONN_MAX_AGE")
+else:
+    DB_CONN_MAX_AGE_DEFAULT = resolve_db_conn_max_age_default(
+        process_role=MESSENGER_PROCESS_ROLE,
+        http_server_mode=MESSENGER_HTTP_SERVER_MODE,
+    )
+
 DATABASES["default"]["CONN_MAX_AGE"] = env.int(
     "DB_CONN_MAX_AGE",
-    default=60,
+    default=DB_CONN_MAX_AGE_DEFAULT,
 )
 
-DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = env.bool(
+    "DB_CONN_HEALTH_CHECKS",
+    default=True,
+)
+
+MESSENGER_RUNTIME_CONFIGURATION = {
+    "process_role": MESSENGER_PROCESS_ROLE,
+    "http_server_mode": MESSENGER_HTTP_SERVER_MODE,
+    "db_conn_max_age": DATABASES["default"]["CONN_MAX_AGE"],
+    "db_conn_health_checks": DATABASES["default"]["CONN_HEALTH_CHECKS"],
+    "db_conn_max_age_explicit": DB_CONN_MAX_AGE_EXPLICIT,
+}
 
 
 # MySQL-specific configuration.

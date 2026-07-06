@@ -1,12 +1,15 @@
 import hashlib
 import os
 import time
+from contextvars import ContextVar
+from contextlib import nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 from apps.group_chat.models import GroupEncryptionEpoch
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 from .policy_services import (
     DeliveryPolicySnapshot,
@@ -38,6 +41,16 @@ from .attachment_services import (
 from django.db.models import Prefetch, QuerySet
 
 from apps.group_chat.models import GroupProfile
+from apps.realtime.events import (
+    MESSAGE_STORED,
+    build_event,
+)
+from apps.realtime.outbox import (
+    RealtimeOutboxCreateSpec,
+    build_direct_message_stored_event_key,
+    enqueue_realtime_outbox_events_sync,
+)
+from apps.realtime.publishers import make_device_group_name
 
 
 class DirectMessageServiceError(Exception):
@@ -73,6 +86,7 @@ class DirectMessageResult:
     recipient_delivery_blocked: bool = False
     recipient_device_ids: tuple[str, ...] = ()
     realtime_event_payload: dict[str, Any] | None = None
+    realtime_outbox_event_count: int = 0
     profile_timings_ms: dict[str, float] | None = None
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +150,202 @@ def profile_checkpoint(
         )
 
 
+def _profile_percentile(values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 2)
+    rank = (len(ordered) - 1) * pct
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 2)
+
+
+_ACTIVE_DB_PROFILE: ContextVar[
+    "DirectSendDatabaseProfile | None"
+] = ContextVar(
+    "myna_direct_send_db_profile",
+    default=None,
+)
+
+
+class DirectSendDatabaseProfile:
+    def __init__(self, timings: dict[str, float] | None) -> None:
+        self.timings = timings
+        self.query_durations_ms: list[float] = []
+        self.query_durations_by_stage_ms: dict[str, list[float]] = {}
+        self.operation_counts: dict[str, int] = {
+            "select": 0,
+            "insert": 0,
+            "update": 0,
+            "delete": 0,
+            "other": 0,
+        }
+        self.operation_counts_by_stage: dict[str, dict[str, int]] = {}
+        self.current_stage = "unattributed"
+        self.started_with_connection = False
+        self._context = None
+        self._profile_token = None
+
+    def __enter__(self):
+        if self.timings is None:
+            return self
+        self.started_with_connection = connection.connection is not None
+        self.timings["db_connection_was_present_before_ensure"] = (
+            1.0
+            if self.started_with_connection
+            else 0.0
+        )
+        ensure_started_ns = time.perf_counter_ns()
+        connection.ensure_connection()
+        self.timings["db_connection_ensure_ms"] = round(
+            (time.perf_counter_ns() - ensure_started_ns) / 1_000_000,
+            2,
+        )
+        self._context = connection.execute_wrapper(self._execute_wrapper)
+        self._context.__enter__()
+        self._profile_token = _ACTIVE_DB_PROFILE.set(self)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        if self._profile_token is not None:
+            _ACTIVE_DB_PROFILE.reset(self._profile_token)
+        if self._context is not None:
+            self._context.__exit__(exc_type, exc, traceback)
+        if self.timings is None:
+            return None
+
+        query_count = len(self.query_durations_ms)
+        total_ms = round(sum(self.query_durations_ms), 2)
+        self.timings["db_query_count"] = float(query_count)
+        self.timings["db_query_total_ms"] = total_ms
+        self.timings["db_query_avg_ms"] = (
+            round(total_ms / query_count, 2)
+            if query_count
+            else 0.0
+        )
+        self.timings["db_query_p50_ms"] = _profile_percentile(
+            self.query_durations_ms,
+            0.50,
+        )
+        self.timings["db_query_p95_ms"] = _profile_percentile(
+            self.query_durations_ms,
+            0.95,
+        )
+        self.timings["db_query_p99_ms"] = _profile_percentile(
+            self.query_durations_ms,
+            0.99,
+        )
+        self.timings["db_query_max_ms"] = (
+            round(max(self.query_durations_ms), 2)
+            if self.query_durations_ms
+            else 0.0
+        )
+        for operation, count in self.operation_counts.items():
+            self.timings[f"db_query_{operation}_count"] = float(count)
+        for stage, durations in sorted(self.query_durations_by_stage_ms.items()):
+            stage_query_count = len(durations)
+            stage_total_ms = round(sum(durations), 2)
+            self.timings[f"{stage}_db_query_count"] = float(stage_query_count)
+            self.timings[f"{stage}_db_query_total_ms"] = stage_total_ms
+            self.timings[f"{stage}_db_query_avg_ms"] = (
+                round(stage_total_ms / stage_query_count, 2)
+                if stage_query_count
+                else 0.0
+            )
+            self.timings[f"{stage}_db_query_p95_ms"] = _profile_percentile(
+                durations,
+                0.95,
+            )
+            self.timings[f"{stage}_db_query_p99_ms"] = _profile_percentile(
+                durations,
+                0.99,
+            )
+            operation_counts = self.operation_counts_by_stage.get(stage, {})
+            for operation in ("select", "insert", "update", "delete", "other"):
+                self.timings[f"{stage}_db_query_{operation}_count"] = float(
+                    operation_counts.get(operation, 0)
+                )
+        self.timings["db_connection_open_at_profile_start"] = (
+            1.0
+            if self.started_with_connection
+            else 0.0
+        )
+        self.timings["db_connection_open_at_profile_finish"] = (
+            1.0
+            if connection.connection is not None
+            else 0.0
+        )
+        self.timings["db_connection_observed_new"] = (
+            1.0
+            if (
+                not self.started_with_connection
+                and connection.connection is not None
+                and query_count > 0
+            )
+            else 0.0
+        )
+        return None
+
+    def _execute_wrapper(self, execute, sql, params, many, context):
+        started_at = time.perf_counter()
+        try:
+            return execute(sql, params, many, context)
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            self.query_durations_ms.append(duration_ms)
+            operation = self._operation_for_sql(sql)
+            self.operation_counts[operation] = (
+                self.operation_counts.get(operation, 0) + 1
+            )
+            stage = str(self.current_stage or "unattributed")
+            self.query_durations_by_stage_ms.setdefault(stage, []).append(
+                duration_ms
+            )
+            stage_operations = self.operation_counts_by_stage.setdefault(
+                stage,
+                {
+                    "select": 0,
+                    "insert": 0,
+                    "update": 0,
+                    "delete": 0,
+                    "other": 0,
+                },
+            )
+            stage_operations[operation] = stage_operations.get(operation, 0) + 1
+
+    @staticmethod
+    def _operation_for_sql(sql: Any) -> str:
+        first_token = str(sql or "").lstrip().split(maxsplit=1)
+        operation = first_token[0].lower() if first_token else ""
+        if operation in {"select", "insert", "update", "delete"}:
+            return operation
+        return "other"
+
+
+def profile_database_queries(timings: dict[str, float] | None):
+    if timings is None:
+        return nullcontext()
+    return DirectSendDatabaseProfile(timings)
+
+
+@contextmanager
+def profile_database_stage(stage: str):
+    profile = _ACTIVE_DB_PROFILE.get()
+    if profile is None:
+        yield
+        return
+
+    previous_stage = profile.current_stage
+    profile.current_stage = str(stage or "unattributed")
+    try:
+        yield
+    finally:
+        profile.current_stage = previous_stage
+
+
 
 def resolve_existing_direct_room_recipient(
     *,
@@ -158,42 +368,45 @@ def resolve_existing_direct_room_recipient(
             "Direct room is unavailable."
         )
 
-    room = (
-        Room.objects.only(
-            "id",
-            "room_type",
-            "is_active",
-            "direct_pair_key",
-            "created_at",
-            "updated_at",
-        )
-        .filter(
-            id=room_id,
-            room_type=Room.RoomType.DIRECT,
-            is_active=True,
-        )
-        .first()
-    )
-
-    if room is None:
-        raise DirectRoomUnavailableError(
-            "Direct room is unavailable."
-        )
-
-    active_member_user_ids = list(
+    active_members = list(
         RoomMember.objects.filter(
-            room_id=room.id,
+            room_id=room_id,
             is_active=True,
+            room__room_type=Room.RoomType.DIRECT,
+            room__is_active=True,
+        )
+        .select_related(
+            "room",
+        )
+        .only(
+            "id",
+            "room_id",
+            "user_id",
+            "is_active",
+            "joined_at",
+            "room__id",
+            "room__room_type",
+            "room__is_active",
+            "room__direct_pair_key",
+            "room__created_at",
+            "room__updated_at",
         )
         .order_by(
             "joined_at",
             "id",
         )
-        .values_list(
-            "user_id",
-            flat=True,
-        )
     )
+
+    if not active_members:
+        raise DirectRoomUnavailableError(
+            "Direct room is unavailable."
+        )
+
+    room = active_members[0].room
+    active_member_user_ids = [
+        member.user_id
+        for member in active_members
+    ]
 
     if (
         len(active_member_user_ids) != 2
@@ -220,14 +433,7 @@ def resolve_existing_direct_room_recipient(
             "Direct room is unavailable."
         )
 
-    room.active_members = tuple(
-        RoomMember(
-            room_id=room.id,
-            user_id=user_id,
-            is_active=True,
-        )
-        for user_id in active_member_user_ids
-    )
+    room.active_members = tuple(active_members)
 
     return room, str(recipient_user_id)
 
@@ -1379,6 +1585,64 @@ def send_direct_message(
             "service_room_update",
             phase_started_at,
         )
+
+        recipient_device_ids = tuple(
+            sorted(
+                str(envelope.recipient_device_id)
+                for envelope in envelope_models
+                if envelope.recipient_user_id == recipient_id
+            )
+        )
+
+        realtime_event_payload = {
+            "room_id": str(room.id),
+            "message_id": str(message.id),
+            "client_message_id": str(message.client_message_id),
+            "sender_user_id": str(message.sender_user_id),
+            "message_type": message.message_type,
+            "requires_fetch": True,
+        }
+
+        realtime_outbox_event_count = 0
+        phase_started_at = time.perf_counter()
+        with profile_database_stage("outbox"):
+            if (
+                not recipient_delivery_blocked
+                and recipient_device_ids
+            ):
+                websocket_payload = build_event(
+                    MESSAGE_STORED,
+                    realtime_event_payload,
+                )
+                outbox_events = []
+
+                for recipient_device_id in recipient_device_ids:
+                    target_group = make_device_group_name(
+                        recipient_device_id,
+                    )
+                    outbox_events.append(
+                        RealtimeOutboxCreateSpec(
+                            event_type=MESSAGE_STORED,
+                            target_group=target_group,
+                            payload=websocket_payload,
+                            event_key=build_direct_message_stored_event_key(
+                                message_id=message.id,
+                                target_group=target_group,
+                            ),
+                        )
+                    )
+
+                realtime_outbox_event_count = (
+                    enqueue_realtime_outbox_events_sync(
+                        outbox_events,
+                    )
+                )
+
+        profile_checkpoint(
+            profile_timings_ms,
+            "service_realtime_outbox_persist",
+            phase_started_at,
+        )
         
     except ValidationError as error:
         raise DirectMessageValidationError(
@@ -1386,14 +1650,6 @@ def send_direct_message(
             if hasattr(error, "message_dict")
             else error.messages
         ) from error
-
-    recipient_device_ids = tuple(
-        sorted(
-            str(envelope.recipient_device_id)
-            for envelope in envelope_models
-            if envelope.recipient_user_id == recipient_id
-        )
-    )
 
     profile_checkpoint(
         profile_timings_ms,
@@ -1409,14 +1665,8 @@ def send_direct_message(
         envelope_count=len(envelope_models),
         recipient_delivery_blocked=recipient_delivery_blocked,
         recipient_device_ids=recipient_device_ids,
-        realtime_event_payload={
-            "room_id": str(room.id),
-            "message_id": str(message.id),
-            "client_message_id": str(message.client_message_id),
-            "sender_user_id": str(message.sender_user_id),
-            "message_type": message.message_type,
-            "requires_fetch": True,
-        },
+        realtime_event_payload=realtime_event_payload,
+        realtime_outbox_event_count=realtime_outbox_event_count,
         profile_timings_ms=profile_timings_ms,
     )
 

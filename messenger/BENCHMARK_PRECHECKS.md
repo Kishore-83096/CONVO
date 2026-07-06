@@ -22,7 +22,7 @@ Start with benchmark-safe overrides:
 
 ```powershell
 cd D:\VENV\PARROT-V2\messenger
-docker run -d --name messenger-service-local --rm --network parrot-local -p 8000:8000 --add-host=host.docker.internal:host-gateway --env-file .env.local -e APP_ENV=local -e DJANGO_DEBUG=False -e LOG_LEVEL=INFO -e DB_CONN_MAX_AGE=10 -e ASGI_THREADS=8 -e MYNA_PROFILE_DIRECT_SEND=true -e WEB_CONCURRENCY=5 -e GUNICORN_BACKLOG=4096 -e GUNICORN_TIMEOUT=60 -e GUNICORN_GRACEFUL_TIMEOUT=30 -e GUNICORN_KEEP_ALIVE=5 -e GUNICORN_ACCESS_LOG=0 -e IDENTITY_SERVICE_BASE_URL=http://identity-service-local:5000/api/v1 -e MESSENGER_SERVICE_BASE_URL=http://messenger-service-local:8000 -e REDIS_URL=redis://redis:6379/0 messenger-service:latest
+docker run -d --name messenger-service-local --rm --network parrot-local -p 8000:8000 --add-host=host.docker.internal:host-gateway --env-file .env.local -e APP_ENV=local -e DJANGO_DEBUG=False -e LOG_LEVEL=INFO -e DB_CONN_MAX_AGE=10 -e ASGI_THREADS=8 -e MYNA_PROFILE_DIRECT_SEND=true -e WEB_CONCURRENCY=4 -e GUNICORN_BACKLOG=4096 -e GUNICORN_TIMEOUT=60 -e GUNICORN_GRACEFUL_TIMEOUT=30 -e GUNICORN_KEEP_ALIVE=5 -e GUNICORN_ACCESS_LOG=0 -e IDENTITY_SERVICE_BASE_URL=http://identity-service-local:5000/api/v1 -e MESSENGER_SERVICE_BASE_URL=http://messenger-service-local:8000 -e REDIS_URL=redis://redis:6379/0 messenger-service:latest
 ```
 
 ## Confirm Runtime Env
@@ -38,7 +38,7 @@ ASGI_THREADS=8
 DB_CONN_MAX_AGE=10
 DJANGO_DEBUG=False
 LOG_LEVEL=INFO
-WEB_CONCURRENCY=5
+WEB_CONCURRENCY=4
 GUNICORN_ACCESS_LOG=0
 ```
 

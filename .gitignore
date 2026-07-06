@@ -139,6 +139,7 @@ $RECYCLE.BIN/
 # Local tooling and task caches
 .agents/
 .codex/
+local-linux-commands/
 .eslintcache
 .stylelintcache
 .sass-cache/

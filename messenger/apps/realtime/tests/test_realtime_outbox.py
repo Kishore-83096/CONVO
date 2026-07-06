@@ -2,13 +2,23 @@ import uuid
 from unittest.mock import patch
 
 from django.core.management import call_command
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.test import TransactionTestCase, override_settings
+from django.utils import timezone
 
 from apps.chat_messages.models import Message, MessageKeyEnvelope
 from apps.e2ee_devices.models import Device
 from apps.realtime.events import MESSAGE_STORED, build_event
 from apps.realtime.models import RealtimeOutboxEvent
-from apps.realtime.outbox import retry_pending_realtime_outbox_events
+from apps.realtime.outbox import (
+    RealtimeOutboxCreateSpec,
+    claim_due_realtime_outbox_events,
+    enqueue_realtime_outbox_events_sync,
+    enqueue_realtime_outbox_event_sync,
+    enqueue_realtime_outbox_event_with_created_sync,
+    retry_pending_realtime_outbox_events,
+)
 from apps.realtime.publishers import (
     make_device_group_name,
     publish_direct_message_stored,
@@ -219,6 +229,7 @@ class RealtimeOutboxTests(TransactionTestCase):
                 "attempted": 1,
                 "delivered": 1,
                 "failed": 0,
+                "dead": 0,
             },
         )
 
@@ -233,14 +244,276 @@ class RealtimeOutboxTests(TransactionTestCase):
         self.assertEqual(outbox_event.last_error, "")
 
         self.assertEqual(len(recording_layer.sent), 1)
-        self.assertEqual(
-            recording_layer.sent[0]["group"],
-            target_group,
+
+    def test_outbox_event_key_deduplicates_logical_event(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
         )
-        self.assertEqual(
-            recording_layer.sent[0]["message"]["payload"]["type"],
+        payload = build_event(
             MESSAGE_STORED,
+            {
+                "message_id": str(self.message.id),
+                "requires_fetch": True,
+            },
         )
+
+        for _ in range(2):
+            enqueue_realtime_outbox_event_sync(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:test",
+            )
+
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
+
+    def test_single_enqueue_returns_existing_event_without_duplication(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        payload = build_event(
+            MESSAGE_STORED,
+            {
+                "message_id": str(self.message.id),
+                "requires_fetch": True,
+            },
+        )
+
+        first_event, first_created = (
+            enqueue_realtime_outbox_event_with_created_sync(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:created-state",
+            )
+        )
+        second_event, second_created = (
+            enqueue_realtime_outbox_event_with_created_sync(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:created-state",
+            )
+        )
+
+        self.assertTrue(first_created)
+        self.assertFalse(second_created)
+        self.assertEqual(first_event.id, second_event.id)
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
+
+    def test_batch_enqueue_reports_created_events(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        payload = build_event(
+            MESSAGE_STORED,
+            {
+                "message_id": str(self.message.id),
+                "requires_fetch": True,
+            },
+        )
+        specs = [
+            RealtimeOutboxCreateSpec(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:batch-created-a",
+            ),
+            RealtimeOutboxCreateSpec(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:batch-created-a",
+            ),
+            RealtimeOutboxCreateSpec(
+                event_type=MESSAGE_STORED,
+                target_group=target_group,
+                payload=payload,
+                event_key="direct-message:batch-created-b",
+            ),
+        ]
+
+        created_count = enqueue_realtime_outbox_events_sync(specs)
+
+        self.assertEqual(created_count, 2)
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 2)
+
+    def test_batch_enqueue_does_not_preflight_exists_lookup(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        payload = build_event(
+            MESSAGE_STORED,
+            {
+                "message_id": str(self.message.id),
+                "requires_fetch": True,
+            },
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            enqueue_realtime_outbox_events_sync(
+                [
+                    RealtimeOutboxCreateSpec(
+                        event_type=MESSAGE_STORED,
+                        target_group=target_group,
+                        payload=payload,
+                        event_key="direct-message:no-preflight-exists",
+                    )
+                ]
+            )
+
+        outbox_selects = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "realtime_outbox_events" in query["sql"]
+            and query["sql"].lstrip().upper().startswith("SELECT")
+        ]
+
+        self.assertEqual(len(outbox_selects), 1)
+
+    def test_outbox_event_rolls_back_with_parent_transaction(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        payload = build_event(
+            MESSAGE_STORED,
+            {
+                "message_id": str(self.message.id),
+                "requires_fetch": True,
+            },
+        )
+
+        with self.assertRaises(RuntimeError):
+            with transaction.atomic():
+                enqueue_realtime_outbox_event_sync(
+                    event_type=MESSAGE_STORED,
+                    target_group=target_group,
+                    payload=payload,
+                    event_key="direct-message:rollback-proof",
+                )
+                raise RuntimeError("force rollback")
+
+        self.assertFalse(
+            RealtimeOutboxEvent.objects.filter(
+                event_key="direct-message:rollback-proof",
+            ).exists()
+        )
+
+    def test_claim_due_events_marks_processing_for_one_worker(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        outbox_event = RealtimeOutboxEvent.objects.create(
+            event_type=MESSAGE_STORED,
+            target_group=target_group,
+            payload=build_event(
+                MESSAGE_STORED,
+                {
+                    "message_id": str(self.message.id),
+                    "requires_fetch": True,
+                },
+            ),
+        )
+
+        claimed = claim_due_realtime_outbox_events(
+            limit=10,
+            worker_id="worker-a",
+        )
+        second_claim = claim_due_realtime_outbox_events(
+            limit=10,
+            worker_id="worker-b",
+        )
+
+        self.assertEqual([event.id for event in claimed], [outbox_event.id])
+        self.assertEqual(second_claim, [])
+
+        outbox_event.refresh_from_db()
+
+        self.assertEqual(
+            outbox_event.status,
+            RealtimeOutboxEvent.Status.PROCESSING,
+        )
+        self.assertEqual(outbox_event.claimed_by, "worker-a")
+        self.assertIsNotNone(outbox_event.claimed_at)
+
+    def test_stale_processing_event_can_be_reclaimed(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        outbox_event = RealtimeOutboxEvent.objects.create(
+            event_type=MESSAGE_STORED,
+            target_group=target_group,
+            payload=build_event(
+                MESSAGE_STORED,
+                {
+                    "message_id": str(self.message.id),
+                    "requires_fetch": True,
+                },
+            ),
+            status=RealtimeOutboxEvent.Status.PROCESSING,
+            claimed_by="old-worker",
+            claimed_at=timezone.now() - timezone.timedelta(minutes=10),
+        )
+
+        claimed = claim_due_realtime_outbox_events(
+            limit=10,
+            worker_id="new-worker",
+            stale_claim_seconds=60,
+        )
+
+        self.assertEqual([event.id for event in claimed], [outbox_event.id])
+
+        outbox_event.refresh_from_db()
+
+        self.assertEqual(outbox_event.claimed_by, "new-worker")
+        self.assertEqual(
+            outbox_event.status,
+            RealtimeOutboxEvent.Status.PROCESSING,
+        )
+
+    def test_retry_marks_event_dead_after_exhaustion(self):
+        target_group = make_device_group_name(
+            str(self.recipient_device_id),
+        )
+        outbox_event = RealtimeOutboxEvent.objects.create(
+            event_type=MESSAGE_STORED,
+            target_group=target_group,
+            payload=build_event(
+                MESSAGE_STORED,
+                {
+                    "message_id": str(self.message.id),
+                    "requires_fetch": True,
+                },
+            ),
+        )
+
+        with patch(
+            "apps.realtime.outbox.get_channel_layer",
+            return_value=FailingChannelLayer(),
+        ):
+            result = retry_pending_realtime_outbox_events(
+                limit=10,
+                max_attempts=1,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "attempted": 1,
+                "delivered": 0,
+                "failed": 0,
+                "dead": 1,
+            },
+        )
+
+        outbox_event.refresh_from_db()
+
+        self.assertEqual(
+            outbox_event.status,
+            RealtimeOutboxEvent.Status.DEAD,
+        )
+        self.assertEqual(outbox_event.attempts, 1)
+        self.assertIn("redis unavailable", outbox_event.last_error)
 
     def test_retry_realtime_outbox_management_command(self):
         recording_layer = RecordingChannelLayer()

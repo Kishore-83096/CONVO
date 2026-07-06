@@ -3,6 +3,7 @@ from django.test import SimpleTestCase
 from django.urls import reverse
 from apps.realtime import events
 from apps.realtime import policies
+from messenger_config import settings as messenger_settings
 from messenger_config.routing import websocket_urlpatterns
 
 
@@ -49,3 +50,33 @@ class RealtimeAppStructureTests(SimpleTestCase):
         self.assertTrue(callable(policies.can_view_presence))
         self.assertTrue(callable(policies.can_publish_receipt_to_sender))
         self.assertTrue(callable(policies.can_send_typing_to_viewer))
+
+    def test_role_aware_db_connection_defaults(self):
+        self.assertEqual(
+            messenger_settings.resolve_db_conn_max_age_default(
+                process_role="http",
+                http_server_mode="wsgi",
+            ),
+            60,
+        )
+        self.assertEqual(
+            messenger_settings.resolve_db_conn_max_age_default(
+                process_role="http",
+                http_server_mode="asgi",
+            ),
+            0,
+        )
+        self.assertEqual(
+            messenger_settings.resolve_db_conn_max_age_default(
+                process_role="websocket",
+                http_server_mode="asgi",
+            ),
+            0,
+        )
+        self.assertEqual(
+            messenger_settings.resolve_db_conn_max_age_default(
+                process_role="outbox",
+                http_server_mode="wsgi",
+            ),
+            60,
+        )

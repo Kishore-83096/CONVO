@@ -4,11 +4,14 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.cache import cache
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.e2ee_devices.models import Device
 from apps.e2ee_devices.services import get_active_device_ids_for_user
+from apps.realtime.models import RealtimeOutboxEvent
 from apps.rooms.models import Room, RoomMember
 
 from ..models import (
@@ -18,9 +21,12 @@ from ..models import (
 )
 from ..services import (
     DirectMessageValidationError,
+    DirectRoomUnavailableError,
     build_direct_pair_key,
+    resolve_existing_direct_room_recipient,
 )
 from ..recovery_send_services import send_direct_message_with_recovery
+from .. import services as message_services
 
 
 class SendMessagePerformanceRegressionTests(TestCase):
@@ -151,6 +157,7 @@ class SendMessagePerformanceRegressionTests(TestCase):
             "service_device_lookup",
             "service_message_insert",
             "service_key_envelope_bulk_insert",
+            "service_realtime_outbox_persist",
             "service_room_update",
             "service_total",
             "recovery_bundle_check",
@@ -164,6 +171,32 @@ class SendMessagePerformanceRegressionTests(TestCase):
                 result.profile_timings_ms[timing_key],
                 0.0,
             )
+
+    def test_outbox_persistence_rolls_back_with_message_transaction(self):
+        original_profile_checkpoint = message_services.profile_checkpoint
+
+        def fail_after_outbox_persist(timings, name, started_at):
+            original_profile_checkpoint(timings, name, started_at)
+            if name == "service_realtime_outbox_persist":
+                raise RuntimeError("force rollback after outbox persist")
+
+        with patch(
+            "apps.chat_messages.services.profile_checkpoint",
+            side_effect=fail_after_outbox_persist,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.send_message(
+                    client_message_id=uuid.UUID(
+                        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+                    ),
+                    encrypted_payload=(
+                        "ROLLBACK_AFTER_OUTBOX_CIPHERTEXT"
+                    ),
+                )
+
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 0)
 
     def test_cached_active_devices_still_reject_missing_recipient_envelope(self):
         get_active_device_ids_for_user("1")
@@ -188,6 +221,71 @@ class SendMessagePerformanceRegressionTests(TestCase):
         )
         self.assertEqual(Message.objects.count(), 0)
         self.assertEqual(MessageKeyEnvelope.objects.count(), 0)
+
+    def test_existing_room_recipient_resolution_uses_one_joined_query(self):
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+            is_active=True,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+            added_by_user_id="1",
+            is_active=True,
+        )
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+            added_by_user_id="1",
+            is_active=True,
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            resolved_room, recipient_user_id = (
+                resolve_existing_direct_room_recipient(
+                    authenticated_user_id="1",
+                    room_id=room.id,
+                )
+            )
+
+        resolver_selects = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith("SELECT")
+            and "messenger_room_members" in query["sql"]
+        ]
+
+        self.assertEqual(len(resolver_selects), 1)
+        self.assertEqual(resolved_room.id, room.id)
+        self.assertEqual(recipient_user_id, "2")
+        self.assertEqual(
+            {member.user_id for member in resolved_room.active_members},
+            {"1", "2"},
+        )
+
+    def test_existing_room_recipient_resolution_rejects_extra_active_member(self):
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+            is_active=True,
+        )
+        for user_id in ("1", "2", "3"):
+            RoomMember.objects.create(
+                room=room,
+                user_id=user_id,
+                role=RoomMember.Role.MEMBER,
+                added_by_user_id="1",
+                is_active=True,
+            )
+
+        with self.assertRaises(DirectRoomUnavailableError):
+            resolve_existing_direct_room_recipient(
+                authenticated_user_id="1",
+                room_id=room.id,
+            )
 
     def test_profiled_existing_room_send_uses_existing_room_validation_checkpoint(self):
         room = Room.objects.create(

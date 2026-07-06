@@ -35,21 +35,21 @@ export ASGI_THREADS="$(env_value ASGI_THREADS 8)"
 
 case "$role" in
     http)
-        http_mode="$(env_value MESSENGER_HTTP_SERVER_MODE asgi)"
+        http_mode="$(env_value MESSENGER_HTTP_SERVER_MODE wsgi)"
         if [ "$http_mode" = "wsgi" ]; then
-            echo "Starting Messenger HTTP legacy WSGI mode on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 5), GUNICORN_THREADS=$(env_value GUNICORN_THREADS 8), GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096)" >&2
+            echo "Starting Messenger HTTP WSGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 4), GUNICORN_THREADS=$(env_value GUNICORN_THREADS 8), GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
             set -- \
                 gunicorn messenger_config.wsgi:application \
                 --worker-class gthread \
                 --threads "$(env_value GUNICORN_THREADS 8)" \
                 --bind "0.0.0.0:${port}" \
-                --workers "$(env_value WEB_CONCURRENCY 5)" \
+                --workers "$(env_value WEB_CONCURRENCY 4)" \
                 --backlog "$(env_value GUNICORN_BACKLOG 4096)" \
                 --timeout "$(env_value GUNICORN_TIMEOUT 60)" \
                 --graceful-timeout "$(env_value GUNICORN_GRACEFUL_TIMEOUT 30)" \
                 --keep-alive "$(env_value GUNICORN_KEEP_ALIVE 5)" \
-                --max-requests "$(env_value GUNICORN_MAX_REQUESTS 1000)" \
-                --max-requests-jitter "$(env_value GUNICORN_MAX_REQUESTS_JITTER 100)" \
+                --max-requests "$(env_value GUNICORN_MAX_REQUESTS 0)" \
+                --max-requests-jitter "$(env_value GUNICORN_MAX_REQUESTS_JITTER 0)" \
                 --access-logfile "$(access_logfile)" \
                 --error-logfile -
             if [ -n "${GUNICORN_ACCESS_LOG_FORMAT:-}" ]; then
@@ -61,18 +61,18 @@ case "$role" in
             echo "Invalid MESSENGER_HTTP_SERVER_MODE: ${http_mode}. Expected one of: asgi, wsgi." >&2
             exit 2
         fi
-        echo "Starting Messenger HTTP ASGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 5), ASGI_THREADS=${ASGI_THREADS}, GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096)" >&2
+        echo "Starting Messenger HTTP ASGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 4), ASGI_THREADS=${ASGI_THREADS}, GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
         set -- \
             gunicorn messenger_config.asgi:application \
             -k uvicorn_worker.UvicornWorker \
             --bind "0.0.0.0:${port}" \
-            --workers "$(env_value WEB_CONCURRENCY 5)" \
+            --workers "$(env_value WEB_CONCURRENCY 4)" \
             --backlog "$(env_value GUNICORN_BACKLOG 4096)" \
             --timeout "$(env_value GUNICORN_TIMEOUT 60)" \
             --graceful-timeout "$(env_value GUNICORN_GRACEFUL_TIMEOUT 30)" \
             --keep-alive "$(env_value GUNICORN_KEEP_ALIVE 5)" \
-            --max-requests "$(env_value GUNICORN_MAX_REQUESTS 1000)" \
-            --max-requests-jitter "$(env_value GUNICORN_MAX_REQUESTS_JITTER 100)" \
+            --max-requests "$(env_value GUNICORN_MAX_REQUESTS 0)" \
+            --max-requests-jitter "$(env_value GUNICORN_MAX_REQUESTS_JITTER 0)" \
             --access-logfile "$(access_logfile)" \
             --error-logfile -
         if [ -n "${GUNICORN_ACCESS_LOG_FORMAT:-}" ]; then
@@ -82,11 +82,15 @@ case "$role" in
         ;;
     websocket)
         port="$(env_value PORT 8001)"
-        echo "Starting Messenger WebSocket ASGI role on 0.0.0.0:${port} with ASGI_THREADS=${ASGI_THREADS}" >&2
+        echo "Starting Messenger WebSocket ASGI role on 0.0.0.0:${port} with ASGI_THREADS=${ASGI_THREADS}, DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
         exec daphne -b 0.0.0.0 -p "$port" messenger_config.asgi:application
         ;;
+    outbox)
+        echo "Starting Messenger realtime outbox worker with REALTIME_OUTBOX_BATCH_SIZE=$(env_value REALTIME_OUTBOX_BATCH_SIZE 100), REALTIME_OUTBOX_POLL_INTERVAL_SECONDS=$(env_value REALTIME_OUTBOX_POLL_INTERVAL_SECONDS 1), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
+        exec python manage.py run_realtime_outbox_worker
+        ;;
     *)
-        echo "Invalid MESSENGER_PROCESS_ROLE: ${role}. Expected one of: http, websocket." >&2
+        echo "Invalid MESSENGER_PROCESS_ROLE: ${role}. Expected one of: http, websocket, outbox." >&2
         exit 2
         ;;
 esac

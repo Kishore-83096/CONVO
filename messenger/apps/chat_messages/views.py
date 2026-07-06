@@ -1,13 +1,31 @@
+import logging
 import time
 
+from django.db.utils import DatabaseError, OperationalError
 from rest_framework import status
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.realtime.publishers import (
-    schedule_direct_message_stored_publish,
+from messenger_config.benchmark_timing import (
+    record_drf_authentication_entry,
+    record_drf_authentication_exit,
+    record_drf_content_negotiation_entry,
+    record_drf_content_negotiation_exit,
+    record_drf_dispatch_entry,
+    record_drf_initial_entry,
+    record_drf_initial_exit,
+    record_drf_initialize_request_entry,
+    record_drf_initialize_request_exit,
+    record_drf_permission_entry,
+    record_drf_permission_exit,
+    record_drf_throttle_entry,
+    record_drf_throttle_exit,
+    record_drf_versioning_entry,
+    record_drf_versioning_exit,
+    record_direct_send_view_entry,
+    record_direct_send_view_exit,
 )
 from messenger_config.identity_client import (
     IdentityClientError,
@@ -33,11 +51,15 @@ from .services import (
     IdempotencyConflictError,
     MessageHistoryAccessError,
     profile_checkpoint,
+    profile_database_queries,
+    profile_database_stage,
     resolve_existing_direct_room_recipient,
     SavedContactRequiredError,
     get_encrypted_message_history,
     list_user_rooms,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def validation_error_response(errors):
@@ -50,25 +72,91 @@ def validation_error_response(errors):
         status=status.HTTP_400_BAD_REQUEST,
     )
 
-class SendDirectMessageView(APIView):
+
+class DirectSendPreViewTimingMixin:
+    def dispatch(self, request, *args, **kwargs):
+        record_drf_dispatch_entry()
+        return super().dispatch(request, *args, **kwargs)
+
+    def initialize_request(self, request, *args, **kwargs):
+        record_drf_initialize_request_entry()
+        try:
+            return super().initialize_request(request, *args, **kwargs)
+        finally:
+            record_drf_initialize_request_exit()
+
+    def initial(self, request, *args, **kwargs):
+        record_drf_initial_entry()
+        try:
+            return super().initial(request, *args, **kwargs)
+        finally:
+            record_drf_initial_exit()
+
+    def perform_content_negotiation(self, request, force=False):
+        record_drf_content_negotiation_entry()
+        try:
+            return super().perform_content_negotiation(request, force=force)
+        finally:
+            record_drf_content_negotiation_exit()
+
+    def determine_version(self, request, *args, **kwargs):
+        record_drf_versioning_entry()
+        try:
+            return super().determine_version(request, *args, **kwargs)
+        finally:
+            record_drf_versioning_exit()
+
+    def perform_authentication(self, request):
+        record_drf_authentication_entry()
+        try:
+            return super().perform_authentication(request)
+        finally:
+            record_drf_authentication_exit()
+
+    def check_permissions(self, request):
+        record_drf_permission_entry()
+        try:
+            return super().check_permissions(request)
+        finally:
+            record_drf_permission_exit()
+
+    def check_throttles(self, request):
+        record_drf_throttle_entry()
+        try:
+            return super().check_throttles(request)
+        finally:
+            record_drf_throttle_exit()
+
+
+class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
     permission_classes = [
         IsAuthenticated,
     ]
 
     def post(self, request) -> Response:
+        view_entry_ns = record_direct_send_view_entry()
         view_timings_ms = (
             {}
             if direct_send_profile_enabled()
             else None
         )
-        view_started_at = time.perf_counter()
         phase_started_at = time.perf_counter()
+        if view_timings_ms is not None:
+            try:
+                auth_jwt_ms = request.META.get(
+                    "MYNA_PROFILE_AUTH_JWT_MS",
+                )
+                if auth_jwt_ms is not None:
+                    view_timings_ms["auth_jwt_ms"] = float(auth_jwt_ms)
+            except (TypeError, ValueError):
+                pass
 
         serializer = SendDirectMessageSerializer(
             data=request.data,
         )
 
         if not serializer.is_valid():
+            record_direct_send_view_exit()
             return validation_error_response(
                 serializer.errors,
             )
@@ -116,53 +204,61 @@ class SendDirectMessageView(APIView):
             identity_contact_id = None
             existing_room = None
 
-            phase_started_at = time.perf_counter()
-            if room_id is not None:
-                existing_room, recipient_user_id = (
-                    resolve_existing_direct_room_recipient(
-                        authenticated_user_id=authenticated_user_id,
-                        room_id=room_id,
+            with profile_database_queries(view_timings_ms):
+                phase_started_at = time.perf_counter()
+                with profile_database_stage("recipient_resolution"):
+                    if room_id is not None:
+                        existing_room, recipient_user_id = (
+                            resolve_existing_direct_room_recipient(
+                                authenticated_user_id=authenticated_user_id,
+                                room_id=room_id,
+                            )
+                        )
+                    else:
+                        resolved_recipient = resolve_saved_contact_recipient(
+                            contact_id=recipient_contact_id,
+                            authorization_header=authorization_header,
+                        )
+
+                        recipient_user_id = resolved_recipient.contact_user_id
+                        sender_contact_validated_by_identity = True
+                        identity_contact_id = resolved_recipient.contact_id
+                profile_checkpoint(
+                    view_timings_ms,
+                    "view_recipient_resolution",
+                    phase_started_at,
+                )
+
+                phase_started_at = time.perf_counter()
+                with profile_database_stage("service_call"):
+                    result = send_direct_message_with_recovery(
+                        sender_user_id=authenticated_user_id,
+                        recipient_user_id=recipient_user_id,
+                        sender_contact_validated_by_identity=(
+                            sender_contact_validated_by_identity
+                        ),
+                        identity_contact_id=identity_contact_id,
+                        existing_room=existing_room,
+                        require_saved_contact=existing_room is not None,
+                        profile_timings_ms=view_timings_ms,
+                        **validated_data,
                     )
-                )
-            else:
-                resolved_recipient = resolve_saved_contact_recipient(
-                    contact_id=recipient_contact_id,
-                    authorization_header=authorization_header,
-                )
-
-                recipient_user_id = resolved_recipient.contact_user_id
-                sender_contact_validated_by_identity = True
-                identity_contact_id = resolved_recipient.contact_id
-            profile_checkpoint(
-                view_timings_ms,
-                "view_recipient_resolution",
-                phase_started_at,
-            )
-
-            phase_started_at = time.perf_counter()
-            result = send_direct_message_with_recovery(
-                sender_user_id=authenticated_user_id,
-                recipient_user_id=recipient_user_id,
-                sender_contact_validated_by_identity=(
-                    sender_contact_validated_by_identity
-                ),
-                identity_contact_id=identity_contact_id,
-                existing_room=existing_room,
-                require_saved_contact=existing_room is not None,
-                **validated_data,
-            )
             profile_checkpoint(
                 view_timings_ms,
                 "view_service_call",
                 phase_started_at,
             )
-            if result.profile_timings_ms is not None:
+            if (
+                result.profile_timings_ms is not None
+                and result.profile_timings_ms is not view_timings_ms
+            ):
                 result.profile_timings_ms.update(view_timings_ms or {})
 
         except (
             SavedContactForbiddenError,
             SavedContactRequiredError,
         ) as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -175,6 +271,7 @@ class SendDirectMessageView(APIView):
             )
 
         except IdentityClientError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -184,6 +281,7 @@ class SendDirectMessageView(APIView):
             )
 
         except RecoveryEnvelopeValidationError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -193,6 +291,7 @@ class SendDirectMessageView(APIView):
             )
 
         except RecoveryEnvelopeConflictError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -202,6 +301,7 @@ class SendDirectMessageView(APIView):
             )
 
         except IdempotencyConflictError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -211,6 +311,7 @@ class SendDirectMessageView(APIView):
             )
 
         except DirectRoomUnavailableError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -220,6 +321,7 @@ class SendDirectMessageView(APIView):
             )
 
         except DirectMessageValidationError as error:
+            record_direct_send_view_exit()
             return Response(
                 {
                     "success": False,
@@ -227,29 +329,26 @@ class SendDirectMessageView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
-        if (
-            result.message_created
-            and not result.recipient_delivery_blocked
-        ):
-            phase_started_at = time.perf_counter()
-            schedule_direct_message_stored_publish(
-                message_id=result.message.id,
-                recipient_user_id=recipient_user_id,
-                event_payload=result.realtime_event_payload,
-                recipient_device_ids=result.recipient_device_ids,
+
+        except (OperationalError, DatabaseError):
+            logger.exception(
+                "Messenger database unavailable during direct message send.",
+                extra={
+                    "authenticated_user_id": getattr(request.user, "user_id", None),
+                },
             )
-            if result.profile_timings_ms is not None:
-                result.profile_timings_ms[
-                    "view_realtime_outbox_enqueue"
-                ] = round(
-                    (
-                        time.perf_counter()
-                        - phase_started_at
-                    )
-                    * 1000,
-                    2,
-                )
+            record_direct_send_view_exit()
+            return Response(
+                {
+                    "success": False,
+                    "message": "Messenger database is temporarily unavailable.",
+                    "errors": {
+                        "code": "database_temporarily_unavailable",
+                    },
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         response_status = (
             status.HTTP_201_CREATED
             if result.message_created
@@ -279,6 +378,9 @@ class SendDirectMessageView(APIView):
             "recipient_delivery_blocked": (
                 result.recipient_delivery_blocked
             ),
+            "realtime_outbox_event_count": (
+                result.realtime_outbox_event_count
+            ),
             "recipient_contact_id": recipient_contact_id,
             "request_room_id": (
                 str(room_id)
@@ -294,14 +396,16 @@ class SendDirectMessageView(APIView):
                 "view_response_build",
                 phase_started_at,
             )
-            profile_checkpoint(
-                result.profile_timings_ms,
-                "view_total",
-                view_started_at,
+            view_exit_ns = record_direct_send_view_exit()
+            result.profile_timings_ms["view_total"] = round(
+                (view_exit_ns - view_entry_ns) / 1_000_000,
+                2,
             )
             response_data["server_timing_ms"] = (
                 result.profile_timings_ms
             )
+        else:
+            record_direct_send_view_exit()
 
         return Response(
             {

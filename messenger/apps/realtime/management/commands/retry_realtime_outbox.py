@@ -25,7 +25,8 @@ class Command(BaseCommand):
                     "Realtime outbox retry complete: "
                     f"attempted={result['attempted']} "
                     f"delivered={result['delivered']} "
-                    f"failed={result['failed']}"
+                    f"failed={result['failed']} "
+                    f"dead={result['dead']}"
                 )
             )
         )

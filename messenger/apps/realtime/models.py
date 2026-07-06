@@ -100,6 +100,7 @@ class RealtimeTicket(models.Model):
 class RealtimeOutboxEvent(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
         DELIVERED = "delivered", "Delivered"
         FAILED = "failed", "Failed"
         DEAD = "dead", "Dead"
@@ -114,6 +115,12 @@ class RealtimeOutboxEvent(models.Model):
     )
     target_group = models.CharField(
         max_length=255,
+    )
+    event_key = models.CharField(
+        max_length=128,
+        unique=True,
+        null=True,
+        blank=True,
     )
     payload = models.JSONField()
     status = models.CharField(
@@ -138,6 +145,15 @@ class RealtimeOutboxEvent(models.Model):
     last_error = models.TextField(
         blank=True,
         default="",
+    )
+    claimed_by = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
+    claimed_at = models.DateTimeField(
+        null=True,
+        blank=True,
     )
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -166,6 +182,13 @@ class RealtimeOutboxEvent(models.Model):
                     "created_at",
                 ],
                 name="rt_outbox_due_idx",
+            ),
+            models.Index(
+                fields=[
+                    "status",
+                    "claimed_at",
+                ],
+                name="rt_outbox_claim_idx",
             ),
             models.Index(
                 fields=[

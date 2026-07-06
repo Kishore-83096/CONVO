@@ -11,7 +11,12 @@ from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from django.db import transaction
 
-from .outbox import send_realtime_group_event
+from .outbox import (
+    RealtimeOutboxCreateSpec,
+    build_direct_message_stored_event_key,
+    enqueue_realtime_outbox_events_sync,
+    send_realtime_group_event,
+)
 
 from apps.chat_messages.models import (
     GroupMessageEncryption,
@@ -396,12 +401,10 @@ def schedule_direct_message_stored_publish(
     recipient_device_ids: tuple[Any, ...] | list[Any] | None = None,
 ) -> None:
     """
-    Schedule direct message realtime publish after database commit.
+    Persist durable direct-message realtime outbox rows.
 
-    If called while inside a transaction, Django runs this after commit.
-    If called outside a transaction, Django runs it immediately.
-
-    Realtime publish failures must never break the REST send response.
+    This function intentionally does not publish to Redis. Direct-message
+    sends must not wait on Channels/Redis in the REST success path.
     """
 
     normalized_message_id = str(message_id).strip()
@@ -412,40 +415,33 @@ def schedule_direct_message_stored_publish(
         if str(device_id).strip()
     )
 
-    def publish_after_commit():
-        if event_payload is not None and normalized_recipient_device_ids:
-            websocket_payload = build_event(
-                MESSAGE_STORED,
-                event_payload,
-            )
+    if (
+        not normalized_message_id
+        or not normalized_recipient_user_id
+        or not event_payload
+        or not normalized_recipient_device_ids
+    ):
+        return
 
-            for recipient_device_id in normalized_recipient_device_ids:
-                async_to_sync(send_realtime_group_event)(
-                    event_type=websocket_payload["type"],
-                    target_group=make_device_group_name(
-                        recipient_device_id,
-                    ),
-                    payload=websocket_payload,
-                )
+    websocket_payload = build_event(
+        MESSAGE_STORED,
+        event_payload,
+    )
 
-            return
-
-        try:
-            async_to_sync(publish_direct_message_stored)(
+    enqueue_realtime_outbox_events_sync(
+        RealtimeOutboxCreateSpec(
+            event_type=MESSAGE_STORED,
+            target_group=make_device_group_name(recipient_device_id),
+            payload=websocket_payload,
+            event_key=build_direct_message_stored_event_key(
                 message_id=normalized_message_id,
-                recipient_user_id=normalized_recipient_user_id,
-            )
-
-        except Exception:
-            logger.exception(
-                "Failed to publish direct message realtime event.",
-                extra={
-                    "message_id": normalized_message_id,
-                    "recipient_user_id": normalized_recipient_user_id,
-                },
-            )
-
-    transaction.on_commit(publish_after_commit)
+                target_group=make_device_group_name(
+                    recipient_device_id,
+                ),
+            ),
+        )
+        for recipient_device_id in normalized_recipient_device_ids
+    )
 
 @dataclass(frozen=True, slots=True)
 class GroupMessageStoredPublishResult:

@@ -17,6 +17,8 @@ from apps.chat_messages.models import (
     MessageKeyEnvelope,
 )
 from apps.e2ee_devices.models import Device
+from apps.realtime.events import MESSAGE_STORED
+from apps.realtime.models import RealtimeOutboxEvent
 from apps.rooms.models import Room, RoomMember
 
 
@@ -75,12 +77,6 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
             saved_name="Recipient",
             contact_number="9999999999",
         )
-
-        self.publish_patcher = patch(
-            "apps.chat_messages.views.schedule_direct_message_stored_publish"
-        )
-        self.mock_schedule_publish = self.publish_patcher.start()
-        self.addCleanup(self.publish_patcher.stop)
 
     def authenticate_as(self, user_id: str):
         now = timezone.now()
@@ -149,7 +145,7 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
             ],
         }
 
-    def test_new_direct_message_schedules_realtime_publish(self):
+    def test_new_direct_message_persists_realtime_outbox_event(self):
         self.authenticate_as("1")
 
         response = self.client.post(
@@ -166,19 +162,54 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
 
         self.assertEqual(Message.objects.count(), 1)
         self.assertEqual(MessageKeyEnvelope.objects.count(), 2)
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
 
-        self.mock_schedule_publish.assert_called_once()
+        outbox_event = RealtimeOutboxEvent.objects.get()
 
-        call_kwargs = self.mock_schedule_publish.call_args.kwargs
+        self.assertEqual(outbox_event.event_type, MESSAGE_STORED)
+        self.assertEqual(
+            outbox_event.status,
+            RealtimeOutboxEvent.Status.PENDING,
+        )
+        self.assertTrue(outbox_event.event_key)
+        self.assertIn(
+            str(self.recipient_device_id),
+            outbox_event.target_group,
+        )
 
         self.assertEqual(
-            str(call_kwargs["message_id"]),
+            outbox_event.payload["data"]["message_id"],
             response.json()["data"]["message_id"],
         )
         self.assertEqual(
-            call_kwargs["recipient_user_id"],
-            "2",
+            response.json()["data"]["realtime_outbox_event_count"],
+            1,
         )
+
+    def test_redis_unavailable_does_not_block_direct_message_response(self):
+        self.authenticate_as("1")
+
+        with patch(
+            "apps.realtime.outbox.get_channel_layer",
+            side_effect=ConnectionError("redis unavailable"),
+        ):
+            response = self.client.post(
+                self.url,
+                self.valid_payload(
+                    client_message_id=uuid.UUID(
+                        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+                    ),
+                ),
+                format="json",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.json(),
+        )
+        self.assertEqual(Message.objects.count(), 1)
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
 
     def test_idempotent_retry_does_not_schedule_duplicate_realtime_publish(self):
         self.authenticate_as("1")
@@ -206,8 +237,7 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
 
         self.assertEqual(Message.objects.count(), 1)
         self.assertEqual(MessageKeyEnvelope.objects.count(), 2)
-
-        self.mock_schedule_publish.assert_called_once()
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 1)
 
     def test_blocked_recipient_sender_only_message_does_not_publish_to_recipient(self):
         """
@@ -253,4 +283,4 @@ class DirectMessageRealtimePublishAPITests(APITestCase):
 
         self.assertEqual(stored_recipient_user_ids, {"1"})
 
-        self.mock_schedule_publish.assert_not_called()
+        self.assertEqual(RealtimeOutboxEvent.objects.count(), 0)

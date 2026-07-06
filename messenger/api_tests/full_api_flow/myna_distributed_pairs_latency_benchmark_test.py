@@ -64,7 +64,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 try:
     from zoneinfo import ZoneInfo
@@ -158,6 +158,8 @@ CONFIG: dict[str, Any] = {
     "DOCKER_STATS_ENABLED": os.getenv("MYNA_DOCKER_STATS_ENABLED", "true" if SERVICE_URL_MODE == "docker" else "false").strip().lower() == "true",
     "DOCKER_STATS_INTERVAL_SECONDS": float(os.getenv("MYNA_DOCKER_STATS_INTERVAL_SECONDS", "1")),
     "CLEANUP_MESSENGER_DJANGO": os.getenv("MYNA_CLEANUP_MESSENGER_DJANGO", "true").strip().lower() == "true",
+    "CLEANUP_DB_RETRY_ATTEMPTS": int(os.getenv("MYNA_CLEANUP_DB_RETRY_ATTEMPTS", "8")),
+    "CLEANUP_DB_RETRY_DELAY_SECONDS": float(os.getenv("MYNA_CLEANUP_DB_RETRY_DELAY_SECONDS", "3")),
     "CLEANUP_IDENTITY_USERS": os.getenv("MYNA_CLEANUP_IDENTITY_USERS", "true").strip().lower() == "true",
     "CLEANUP_IDENTITY_DELAY_SECONDS": float(os.getenv("MYNA_CLEANUP_IDENTITY_DELAY_SECONDS", "0")),
     "IDENTITY_BASE_URL_SOURCE": IDENTITY_BASE_URL_SOURCE,
@@ -180,6 +182,10 @@ CONFIG: dict[str, Any] = {
         "myna_distributed_pairs_latency",
     ),
     "REPORT_TIMEZONE": os.getenv("MYNA_REPORT_TIMEZONE", "Asia/Kolkata"),
+    "WRITE_LEGACY_MARKDOWN": os.getenv(
+        "MYNA_WRITE_LEGACY_MARKDOWN",
+        "true",
+    ).strip().lower() in {"1", "true", "yes", "on"},
 }
 
 TEST_RUN_ID = os.getenv("MYNA_TEST_RUN_ID", f"myna-dp-{uuid.uuid4().hex[:10]}")
@@ -187,6 +193,8 @@ HTTP_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"
 PAYLOAD_AAD = b"myna-direct-message-v1"
 KEY_WRAP_AAD = b"myna-key-envelope-v1"
 KEY_WRAP_INFO = b"myna-test-key-wrap-v1"
+HTTPX_REQUEST_HOOK_AT: dict[str, float] = {}
+HTTPX_RESPONSE_HOOK_AT: dict[str, float] = {}
 
 for _logger_name in ("asyncio", "httpx", "httpcore"):
     logging.getLogger(_logger_name).setLevel(logging.WARNING)
@@ -205,6 +213,36 @@ def local_report_now() -> datetime:
 
 def log_progress(message: str) -> None:
     print(f"[{local_report_now().strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def print_benchmark_level_table_header() -> None:
+    print(
+        "| Concurrency | Requests | Success | Failure | P95 ms | Msg/s | Overall req total ms | Main Django total ms | Main Django avg ms | Main Django p95 ms |",
+        flush=True,
+    )
+    print(
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        flush=True,
+    )
+
+
+def print_benchmark_level_table_row(level_summary: dict[str, Any]) -> None:
+    latency = level_summary.get("latency_ms", {})
+    overall = level_summary.get("overall_client_request_time_ms", {})
+    main = level_summary.get("main_django_logic_time_ms", {})
+    print(
+        f"| {level_summary.get('concurrency')} | "
+        f"{level_summary.get('total_messages')} | "
+        f"{level_summary.get('success_count')} | "
+        f"{level_summary.get('failure_count')} | "
+        f"{latency.get('p95')} | "
+        f"{level_summary.get('messages_per_second')} | "
+        f"{overall.get('total')} | "
+        f"{main.get('total')} | "
+        f"{main.get('avg')} | "
+        f"{main.get('p95')} |",
+        flush=True,
+    )
 
 
 def utc_now_iso() -> str:
@@ -233,7 +271,11 @@ def b64encode(raw: bytes) -> str:
 
 
 def b64decode(text: str) -> bytes:
-    return base64.b64decode(text.encode("ascii"))
+    normalized = text.strip()
+    padding = (-len(normalized)) % 4
+    if padding:
+        normalized = f"{normalized}{'=' * padding}"
+    return base64.urlsafe_b64decode(normalized.encode("ascii"))
 
 
 def api_url(base: str, path: str) -> str:
@@ -335,6 +377,123 @@ def url_hostname(value: str | None) -> str | None:
         return None
 
 
+def redact_database_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return None
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def mysql_connection_params(database_url: str) -> dict[str, Any]:
+    parsed = urlsplit(database_url)
+    query = dict(parse_qsl(parsed.query))
+    return {
+        "host": parsed.hostname or "127.0.0.1",
+        "port": parsed.port or 3306,
+        "user": unquote(parsed.username or ""),
+        "passwd": unquote(parsed.password or ""),
+        "db": parsed.path.lstrip("/") or None,
+        "connect_timeout": int(query.get("connect_timeout") or 5),
+        "charset": query.get("charset") or "utf8mb4",
+    }
+
+
+def capture_mysql_connection_snapshot(stage: str) -> dict[str, Any]:
+    captured_at = utc_now_iso()
+    database_url, source = messenger_docker_cleanup_database_url()
+    base: dict[str, Any] = {
+        "stage": stage,
+        "captured_at": captured_at,
+        "database_url_source": source,
+        "database_url_safe": redact_database_url(database_url),
+    }
+    if not database_url:
+        return {**base, "available": False, "error": "No database URL available."}
+
+    try:
+        import MySQLdb
+
+        connection = MySQLdb.connect(**mysql_connection_params(database_url))
+        try:
+            cursor = connection.cursor()
+            variables: dict[str, Any] = {}
+            status: dict[str, Any] = {}
+            for query, target in (
+                ("SHOW VARIABLES LIKE 'max_connections'", variables),
+                ("SHOW GLOBAL STATUS LIKE 'Threads_connected'", status),
+                ("SHOW GLOBAL STATUS LIKE 'Threads_running'", status),
+                ("SHOW GLOBAL STATUS LIKE 'Max_used_connections'", status),
+                ("SHOW GLOBAL STATUS LIKE 'Connection_errors_max_connections'", status),
+                ("SHOW GLOBAL STATUS LIKE 'Aborted_connects'", status),
+            ):
+                try:
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+                    if row:
+                        target[str(row[0])] = row[1]
+                except Exception as exc:
+                    target[f"error:{query}"] = repr(exc)
+            processlist_groups: list[dict[str, Any]] = []
+            try:
+                cursor.execute(
+                    """
+                    SELECT USER, HOST, DB, COMMAND, COUNT(*) AS connection_count
+                    FROM information_schema.PROCESSLIST
+                    GROUP BY USER, HOST, DB, COMMAND
+                    ORDER BY connection_count DESC
+                    """
+                )
+                for user, host, db, command, count in cursor.fetchall():
+                    processlist_groups.append(
+                        {
+                            "user": str(user),
+                            "host": str(host),
+                            "db": str(db or ""),
+                            "command": str(command),
+                            "connection_count": int(count),
+                        }
+                    )
+            except Exception as exc:
+                processlist_groups.append({"error": repr(exc)})
+            return {
+                **base,
+                "available": True,
+                "max_connections": int(variables.get("max_connections") or 0),
+                "threads_connected": int(status.get("Threads_connected") or 0),
+                "threads_running": int(status.get("Threads_running") or 0),
+                "max_used_connections": int(status.get("Max_used_connections") or 0),
+                "connection_errors_max_connections": int(status.get("Connection_errors_max_connections") or 0),
+                "aborted_connects": int(status.get("Aborted_connects") or 0),
+                "processlist_groups": processlist_groups,
+            }
+        finally:
+            connection.close()
+    except Exception as exc:
+        return {
+            **base,
+            "available": False,
+            "error": repr(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+async def add_mysql_telemetry(report: dict[str, Any], stage: str) -> None:
+    telemetry = report.setdefault(
+        "database_connection_telemetry",
+        {"available": True, "snapshots": []},
+    )
+    snapshot = await asyncio.to_thread(capture_mysql_connection_snapshot, stage)
+    telemetry.setdefault("snapshots", []).append(snapshot)
+    if not snapshot.get("available"):
+        telemetry["available"] = False
+
+
 def decode_jwt_payload_without_verification(token: str) -> dict[str, Any]:
     try:
         payload_part = token.split(".")[1]
@@ -365,6 +524,7 @@ class ApiCallRecord:
 
 
 API_CALL_RECORDS: list[ApiCallRecord] = []
+SETUP_STEP_RECORDS: list[dict[str, Any]] = []
 CURRENT_PHASE = "setup"
 CURRENT_BENCHMARK_CONCURRENCY: int | None = None
 
@@ -853,16 +1013,44 @@ class DockerStatsSampler:
 
 def _latency_summary(values: list[float]) -> dict[str, Any]:
     if not values:
-        return {"min": None, "max": None, "avg": None, "median": None, "p95": None}
+        return {
+            "min": None,
+            "max": None,
+            "avg": None,
+            "median": None,
+            "p50": None,
+            "p75": None,
+            "p90": None,
+            "p95": None,
+            "p99": None,
+        }
     values = sorted(values)
-    p95 = statistics.quantiles(values, n=20, method="inclusive")[18] if len(values) >= 2 else values[0]
+    def pct(p: float) -> float:
+        if len(values) == 1:
+            return values[0]
+        rank = (len(values) - 1) * p
+        lower = int(rank)
+        upper = min(lower + 1, len(values) - 1)
+        weight = rank - lower
+        return values[lower] * (1 - weight) + values[upper] * weight
+
     return {
         "min": round(min(values), 2),
         "max": round(max(values), 2),
         "avg": round(statistics.mean(values), 2),
         "median": round(statistics.median(values), 2),
-        "p95": round(p95, 2),
+        "p50": round(pct(0.50), 2),
+        "p75": round(pct(0.75), 2),
+        "p90": round(pct(0.90), 2),
+        "p95": round(pct(0.95), 2),
+        "p99": round(pct(0.99), 2),
     }
+
+
+def _timing_spent_summary(values: list[float]) -> dict[str, Any]:
+    result = _latency_summary(values)
+    result["total"] = round(sum(values), 2) if values else None
+    return result
 
 
 def summarize_api_calls(records: list[ApiCallRecord]) -> dict[str, Any]:
@@ -1082,37 +1270,82 @@ class SentMessageRecord:
     response_body: Any = None
     latency_ms: float | None = None
     error: str | None = None
+    error_type: str | None = None
+    semaphore_wait_ms: float | None = None
+    client_request_ms: float | None = None
+    client_request_hook_delay_ms: float | None = None
+    client_to_response_headers_ms: float | None = None
+    client_transport_to_response_headers_ms: float | None = None
+    client_response_body_read_ms: float | None = None
     benchmark_request_id: str | None = None
     benchmark_phase: str | None = None
     benchmark_concurrency_header: int | None = None
 
     @property
+    def response_data(self) -> dict[str, Any]:
+        if not isinstance(self.response_body, dict):
+            return {}
+        data = self.response_body.get("data")
+        return data if isinstance(data, dict) else {}
+
+    @property
+    def expected_envelope_count(self) -> int:
+        return len(self.payload.get("envelopes") or [])
+
+    @property
+    def success_validation_errors(self) -> list[str]:
+        errors: list[str] = []
+        if self.response_status not in {200, 201}:
+            errors.append(f"status must be 200 or 201, got {self.response_status}")
+        if not isinstance(self.response_body, dict):
+            errors.append("response body must be a JSON object")
+            return errors
+        if self.response_body.get("success") is not True:
+            errors.append("response.success must be true")
+        data = self.response_body.get("data")
+        if not isinstance(data, dict):
+            errors.append("response.data must be a JSON object")
+            return errors
+        if str(data.get("client_message_id") or "") != self.client_message_id:
+            errors.append("response.data.client_message_id must match request.client_message_id")
+        if not str(data.get("message_id") or ""):
+            errors.append("response.data.message_id is required")
+        if not str(data.get("room_id") or ""):
+            errors.append("response.data.room_id is required")
+        if data.get("room_type") != "direct":
+            errors.append("response.data.room_type must be direct")
+        envelope_count = data.get("envelope_count")
+        if envelope_count != self.expected_envelope_count:
+            errors.append(
+                "response.data.envelope_count must match request.envelopes length "
+                f"({self.expected_envelope_count}), got {envelope_count}"
+            )
+        if data.get("message_created") is not True and self.response_status == 201:
+            errors.append("201 response must have response.data.message_created=true")
+        return errors
+
+    @property
     def ok(self) -> bool:
-        return (
-            self.response_status in {200, 201}
-            and isinstance(self.response_body, dict)
-            and self.response_body.get("success") is True
-            and isinstance(self.response_body.get("data"), dict)
-        )
+        return not self.success_validation_errors
 
     @property
     def message_id(self) -> str | None:
         if not self.ok:
             return None
-        return str(self.response_body["data"].get("message_id") or "")
+        return str(self.response_data.get("message_id") or "")
 
     @property
     def room_id(self) -> str | None:
         if not self.ok:
             return None
-        return str(self.response_body["data"].get("room_id") or "")
+        return str(self.response_data.get("room_id") or "")
 
     @property
     def server_timing_ms(self) -> dict[str, float]:
         if not self.ok:
             return {}
 
-        timings = self.response_body["data"].get("server_timing_ms")
+        timings = self.response_data.get("server_timing_ms")
         if not isinstance(timings, dict):
             return {}
 
@@ -1151,7 +1384,33 @@ def make_device_material(role: str) -> DeviceMaterial:
 
 
 def load_x25519_public_key(public_key_b64: str) -> x25519.X25519PublicKey:
-    return x25519.X25519PublicKey.from_public_bytes(b64decode(public_key_b64))
+    raw = b64decode(public_key_b64)
+    if len(raw) != 32:
+        raise ValueError(
+            "X25519 public keys must decode to 32 bytes, "
+            f"got {len(raw)} bytes from value length {len(public_key_b64)}"
+        )
+    return x25519.X25519PublicKey.from_public_bytes(raw)
+
+
+def get_claimed_device_identity_key(claimed_device: dict[str, Any]) -> str:
+    for key in ("identity_key_public", "identity_public_key"):
+        value = str(claimed_device.get(key) or "").strip()
+        if value:
+            try:
+                load_x25519_public_key(value)
+            except (ValueError, binascii.Error) as exc:
+                raise RuntimeError(
+                    f"Recipient prekey claim returned invalid {key} "
+                    f"for device {claimed_device.get('device_id')}: {exc}"
+                ) from exc
+            return value
+
+    raise RuntimeError(
+        "Recipient prekey claim did not include a valid top-level "
+        f"identity_key_public for device {claimed_device.get('device_id')}: "
+        f"{claimed_device}"
+    )
 
 
 def derive_wrap_key(private_key: x25519.X25519PrivateKey, peer_public_key: x25519.X25519PublicKey) -> bytes:
@@ -1222,6 +1481,84 @@ async def register_identity_user(client: httpx.AsyncClient, *, role: str, userna
         },
         expected_statuses={201},
     )
+
+
+def setup_failure_reason(exc: Exception) -> str:
+    text = str(exc)
+    if "failed with HTTP 400" in text:
+        return f"setup_api_validation_error_400: {text}"
+    if "failed with HTTP 401" in text:
+        return f"setup_auth_error_401: {text}"
+    if "failed with HTTP 403" in text:
+        return f"setup_permission_error_403: {text}"
+    if "failed with HTTP 409" in text:
+        return f"setup_conflict_409: {text}"
+    if "failed with HTTP 503" in text:
+        return f"setup_dependency_unavailable_503: {text}"
+    if "failed with HTTP 5" in text:
+        return f"setup_server_error: {text}"
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return f"setup_timeout: {text}"
+    if "Prekey" in text or "prekey" in text:
+        return f"setup_prekey_error: {text}"
+    if "device" in text.lower():
+        return f"setup_device_error: {text}"
+    return f"setup_exception: {repr(exc)}"
+
+
+async def run_setup_step(pair_index: int, step: str, awaitable: Any) -> Any:
+    started = time.perf_counter()
+    try:
+        result = await awaitable
+        SETUP_STEP_RECORDS.append(
+            {
+                "pair_index": pair_index,
+                "step": step,
+                "success": True,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            }
+        )
+        return result
+    except Exception as exc:
+        SETUP_STEP_RECORDS.append(
+            {
+                "pair_index": pair_index,
+                "step": step,
+                "success": False,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                "reason": setup_failure_reason(exc),
+                "error": repr(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )
+        raise
+
+
+def summarize_setup_step_records(pair_count: int, successful_pair_count: int) -> dict[str, Any]:
+    failed = [record for record in SETUP_STEP_RECORDS if not record.get("success")]
+    by_step: dict[str, dict[str, int]] = {}
+    for record in SETUP_STEP_RECORDS:
+        step = str(record.get("step") or "unknown")
+        bucket = by_step.setdefault(step, {"success": 0, "failure": 0})
+        bucket["success" if record.get("success") else "failure"] += 1
+
+    reason_counts: dict[str, int] = {}
+    for record in failed:
+        reason = str(record.get("reason") or record.get("error") or "setup_failed")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    return {
+        "pair_count_requested": pair_count,
+        "pair_count_successful": successful_pair_count,
+        "setup_step_count": len(SETUP_STEP_RECORDS),
+        "failed_count": len(failed),
+        "by_step": by_step,
+        "top_reasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "failed_samples": failed[:20],
+    }
 
 
 async def login_identity_user(client: httpx.AsyncClient, *, role: str, username: str, password: str) -> TestUser:
@@ -1361,21 +1698,74 @@ async def setup_one_pair(client: httpx.AsyncClient, index: int) -> PairContext:
     recipient_username = f"myna_dp_{suffix}_{index:03d}_r"
     password = f"MynaDP_{suffix}_{index:03d}_Pass123"
 
-    await register_identity_user(client, role=f"sender-{index}", username=sender_username, password=password)
-    await register_identity_user(client, role=f"recipient-{index}", username=recipient_username, password=password)
-    sender = await login_identity_user(client, role="sender", username=sender_username, password=password)
-    recipient = await login_identity_user(client, role="recipient", username=recipient_username, password=password)
+    await run_setup_step(
+        index,
+        "identity_register_sender",
+        register_identity_user(client, role=f"sender-{index}", username=sender_username, password=password),
+    )
+    await run_setup_step(
+        index,
+        "identity_register_recipient",
+        register_identity_user(client, role=f"recipient-{index}", username=recipient_username, password=password),
+    )
+    sender = await run_setup_step(
+        index,
+        "identity_login_sender",
+        login_identity_user(client, role="sender", username=sender_username, password=password),
+    )
+    recipient = await run_setup_step(
+        index,
+        "identity_login_recipient",
+        login_identity_user(client, role="recipient", username=recipient_username, password=password),
+    )
 
-    await assert_messenger_auth(client, user=sender)
-    await assert_messenger_auth(client, user=recipient)
+    await run_setup_step(index, "messenger_whoami_sender", assert_messenger_auth(client, user=sender))
+    await run_setup_step(index, "messenger_whoami_recipient", assert_messenger_auth(client, user=recipient))
 
-    contact_id, sender = await add_recipient_contact(client, sender=sender, recipient=recipient)
+    reset_result = await run_setup_step(
+        index,
+        "messenger_reset_state",
+        asyncio.to_thread(reset_messenger_state_for_user_ids, [sender.user_id, recipient.user_id]),
+    )
+    if not reset_result.get("success", False):
+        SETUP_STEP_RECORDS.append(
+            {
+                "pair_index": index,
+                "step": "messenger_reset_state",
+                "success": False,
+                "duration_ms": None,
+                "reason": f"setup_messenger_reset_state_failed: {reset_result}",
+                "error": repr(reset_result),
+            }
+        )
+        raise RuntimeError(
+            "Messenger setup-state reset failed "
+            f"for pair {index}: {reset_result}"
+        )
+
+    contact_id, sender = await run_setup_step(
+        index,
+        "identity_add_recipient_contact",
+        add_recipient_contact(client, sender=sender, recipient=recipient),
+    )
 
     sender_device = make_device_material(f"sender-{index}")
     recipient_device = make_device_material(f"recipient-{index}")
-    await register_messenger_device(client, user=sender, material=sender_device)
-    await register_messenger_device(client, user=recipient, material=recipient_device)
-    claimed, sender = await claim_recipient_prekey_bundles(client, sender=sender, recipient_contact_id=contact_id)
+    await run_setup_step(
+        index,
+        "messenger_register_sender_device",
+        register_messenger_device(client, user=sender, material=sender_device),
+    )
+    await run_setup_step(
+        index,
+        "messenger_register_recipient_device",
+        register_messenger_device(client, user=recipient, material=recipient_device),
+    )
+    claimed, sender = await run_setup_step(
+        index,
+        "messenger_claim_recipient_prekey",
+        claim_recipient_prekey_bundles(client, sender=sender, recipient_contact_id=contact_id),
+    )
 
     return PairContext(
         index=index,
@@ -1468,16 +1858,11 @@ def build_send_payload_for_pair(*, pair: PairContext, sequence: int, benchmark_c
 
     for recipient_index, claimed_device in enumerate(claimed_recipient_devices, start=1):
         recipient_device_id = str(claimed_device.get("device_id") or "").strip()
-        recipient_public_key_b64 = str(
-            claimed_device.get("identity_key_public")
-            or claimed_device.get("identity_public_key")
-            or claimed_device.get("public_key")
-            or ""
-        ).strip()
+        recipient_public_key_b64 = get_claimed_device_identity_key(claimed_device)
 
-        if not recipient_device_id or not recipient_public_key_b64:
+        if not recipient_device_id:
             raise RuntimeError(
-                "Recipient prekey claim did not include device_id and identity_key_public "
+                "Recipient prekey claim did not include device_id "
                 f"for pair {pair.index}: {claimed_device}"
             )
 
@@ -1519,6 +1904,7 @@ def build_send_payload_for_pair(*, pair: PairContext, sequence: int, benchmark_c
     else:
         payload["recipient_contact_id"] = pair.recipient_contact_id
 
+    validate_direct_send_payload_shape(payload)
     return SentMessageRecord(
         sequence=sequence,
         pair_index=pair.index,
@@ -1529,8 +1915,47 @@ def build_send_payload_for_pair(*, pair: PairContext, sequence: int, benchmark_c
     )
 
 
+def validate_direct_send_payload_shape(payload: dict[str, Any]) -> None:
+    has_room_id = bool(payload.get("room_id"))
+    has_contact_id = payload.get("recipient_contact_id") is not None
+    if has_room_id == has_contact_id:
+        raise RuntimeError(
+            "Direct send payload must include exactly one recipient selector: "
+            "room_id for an existing direct room or recipient_contact_id for "
+            "the first direct message."
+        )
+    required_fields = [
+        "sender_device_id",
+        "client_message_id",
+        "message_type",
+        "encrypted_payload",
+        "encryption_metadata",
+        "encryption_version",
+        "client_sent_at",
+        "envelopes",
+    ]
+    missing = [field for field in required_fields if payload.get(field) in (None, "")]
+    if missing:
+        raise RuntimeError(f"Direct send payload is missing required fields: {missing}")
+    if not isinstance(payload.get("encryption_metadata"), dict):
+        raise RuntimeError("Direct send payload encryption_metadata must be a JSON object.")
+    envelopes = payload.get("envelopes")
+    if not isinstance(envelopes, list) or not envelopes:
+        raise RuntimeError("Direct send payload requires at least one encrypted device envelope.")
+    device_ids = [str(item.get("recipient_device_id") or "") for item in envelopes if isinstance(item, dict)]
+    if len(device_ids) != len(envelopes) or any(not item for item in device_ids):
+        raise RuntimeError("Every direct send envelope must include recipient_device_id.")
+    if len(device_ids) != len(set(device_ids)):
+        raise RuntimeError("Direct send payload has duplicate recipient_device_id envelopes.")
+
+
 async def send_one_message(client: httpx.AsyncClient, *, record: SentMessageRecord, semaphore: asyncio.Semaphore) -> None:
+    semaphore_wait_started = time.perf_counter()
     async with semaphore:
+        semaphore_acquired = time.perf_counter()
+        record.semaphore_wait_ms = (
+            semaphore_acquired - semaphore_wait_started
+        ) * 1000
         url = api_url(CONFIG["MESSENGER_BASE_URL"], "/api/v1/messages/direct/")
         headers = dict(HTTP_HEADERS)
         headers["Authorization"] = f"Bearer {record.sender_token}"
@@ -1542,13 +1967,28 @@ async def send_one_message(client: httpx.AsyncClient, *, record: SentMessageReco
         start = time.perf_counter()
         try:
             response = await client.post(url, json=record.payload, headers=headers)
-            record.latency_ms = (time.perf_counter() - start) * 1000
+            finished = time.perf_counter()
+            record.client_request_ms = (finished - start) * 1000
+            record.latency_ms = record.client_request_ms
+            apply_httpx_hook_timings(
+                record,
+                request_started_at=start,
+                request_finished_at=finished,
+            )
             record.response_status = response.status_code
             record.response_body = json_or_text(response)
             record_api_call("POST", url, response.status_code, record.latency_ms, record.ok)
         except Exception as exc:
-            record.latency_ms = (time.perf_counter() - start) * 1000
+            finished = time.perf_counter()
+            record.client_request_ms = (finished - start) * 1000
+            record.latency_ms = record.client_request_ms
+            apply_httpx_hook_timings(
+                record,
+                request_started_at=start,
+                request_finished_at=finished,
+            )
             record.error = repr(exc)
+            record.error_type = exc.__class__.__name__
             record_api_call("POST", url, None, record.latency_ms, False, repr(exc))
 
 
@@ -1607,7 +2047,7 @@ async def run_connection_warmup(
     summary["measured_in_benchmark_summary"] = False
     summary["target_concurrency"] = concurrency
     summary["total_send_elapsed_ms"] = round(elapsed_ms, 2)
-    summary["messages_per_second"] = round(len(records) / max(elapsed_ms / 1000, 0.001), 2)
+    add_throughput_metrics(summary, elapsed_ms=elapsed_ms)
     log_progress(
         f"Connection warmup done: success={summary['success_count']}, failure={summary['failure_count']}, "
         f"cooldown={CONFIG['BENCHMARK_COOLDOWN_SECONDS']}s"
@@ -1623,10 +2063,150 @@ def apply_room_ids_to_pairs(records: list[SentMessageRecord], pairs_by_index: di
             pairs_by_index[record.pair_index].room_id = record.room_id
 
 
+def failure_reason_for_record(record: SentMessageRecord) -> str:
+    if record.error:
+        return f"client_exception: {record.error}"
+
+    body = record.response_body if isinstance(record.response_body, dict) else {}
+    message = str(body.get("message") or "").strip()
+    errors = body.get("errors")
+    status = record.response_status
+
+    if record.success_validation_errors:
+        return "api_contract_mismatch: " + "; ".join(record.success_validation_errors[:3])
+    if status is None:
+        return "client_exception: request did not return an HTTP response"
+    if status == 400:
+        detail = message or json.dumps(errors, default=str) if errors else message
+        return f"api_validation_error_400: {detail or 'request rejected by send direct message validation'}"
+    if status == 403:
+        return f"contact_or_permission_error_403: {message or 'sender is not allowed to send to this recipient'}"
+    if status == 409:
+        return f"conflict_409: {message or 'direct room, idempotency, or recovery envelope conflict'}"
+    if status == 503:
+        return f"dependency_unavailable_503: {message or 'identity or messenger dependency unavailable'}"
+    if status and status >= 500:
+        return f"server_error_{status}: {message or 'send direct message API returned a server error'}"
+    return f"http_{status}: {message or 'request failed'}"
+
+
+def primary_failure_category_for_record(record: SentMessageRecord) -> str | None:
+    if record.ok:
+        return None
+
+    if record.error_type:
+        known_client_errors = {
+            "PoolTimeout",
+            "ConnectTimeout",
+            "ReadTimeout",
+            "WriteTimeout",
+            "ReadError",
+            "ConnectError",
+            "RemoteProtocolError",
+        }
+        if record.error_type in known_client_errors:
+            return record.error_type
+        return f"client_exception_{record.error_type}"
+
+    body = record.response_body if isinstance(record.response_body, dict) else {}
+    errors = body.get("errors") if isinstance(body, dict) else {}
+    code = ""
+    if isinstance(errors, dict):
+        code = str(errors.get("code") or "")
+
+    status = record.response_status
+    if status == 503 and code == "database_temporarily_unavailable":
+        return "http_503_database_temporarily_unavailable"
+    if status is not None:
+        return f"http_{status}"
+
+    return "unknown_failure"
+
+
+def summarize_failure_diagnostics(records: list[SentMessageRecord]) -> dict[str, Any]:
+    failed_records = [record for record in records if not record.ok]
+    reason_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    for record in failed_records:
+        reason = failure_reason_for_record(record)
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        category = primary_failure_category_for_record(record) or "none"
+        category_counts[category] = category_counts.get(category, 0) + 1
+    top_reasons = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    top_categories = [
+        {"category": category, "count": count}
+        for category, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return {
+        "failed_count": len(failed_records),
+        "top_primary_failure_categories": top_categories,
+        "top_reasons": top_reasons,
+        "samples": [
+            {
+                "sequence": record.sequence,
+                "pair_index": record.pair_index,
+                "status": record.response_status,
+                "primary_failure_category": primary_failure_category_for_record(record),
+                "reason": failure_reason_for_record(record),
+                "client_message_id": record.client_message_id,
+                "benchmark_request_id": record.benchmark_request_id,
+                "benchmark_phase": record.benchmark_phase,
+                "benchmark_concurrency": record.benchmark_concurrency_header,
+                "client_exception_type": record.error_type,
+                "api_message": (
+                    record.response_body.get("message")
+                    if isinstance(record.response_body, dict)
+                    else None
+                ),
+                "api_errors": (
+                    record.response_body.get("errors")
+                    if isinstance(record.response_body, dict)
+                    else None
+                ),
+                "success_validation_errors": record.success_validation_errors,
+            }
+            for record in failed_records[:20]
+        ],
+    }
+
+
 def summarize_records(records: list[SentMessageRecord], concurrency: Any | None = None) -> dict[str, Any]:
     ok_records = [record for record in records if record.ok]
     failed_records = [record for record in records if not record.ok]
     latencies = [record.latency_ms for record in records if record.latency_ms is not None]
+    semaphore_waits = [
+        record.semaphore_wait_ms
+        for record in records
+        if record.semaphore_wait_ms is not None
+    ]
+    client_request_times = [
+        record.client_request_ms
+        for record in records
+        if record.client_request_ms is not None
+    ]
+    client_request_hook_delays = [
+        record.client_request_hook_delay_ms
+        for record in records
+        if record.client_request_hook_delay_ms is not None
+    ]
+    client_to_response_headers = [
+        record.client_to_response_headers_ms
+        for record in records
+        if record.client_to_response_headers_ms is not None
+    ]
+    client_transport_to_response_headers = [
+        record.client_transport_to_response_headers_ms
+        for record in records
+        if record.client_transport_to_response_headers_ms is not None
+    ]
+    client_response_body_reads = [
+        record.client_response_body_read_ms
+        for record in records
+        if record.client_response_body_read_ms is not None
+    ]
     statuses: dict[str, int] = {}
     for record in records:
         key = str(record.response_status or "exception")
@@ -1637,6 +2217,9 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
     for record in ok_records:
         for key, value in record.server_timing_ms.items():
             server_timing_values.setdefault(key, []).append(value)
+    failed_latencies = [record.latency_ms for record in failed_records if record.latency_ms is not None]
+    overall_client_request_times = [float(value) for value in latencies]
+    main_django_logic_times = server_timing_values.get("view_total", [])
 
     return {
         "total_messages": len(records),
@@ -1648,7 +2231,44 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
         "duplicate_message_id_count": len(message_ids) - len(set(message_ids)),
         "unique_room_id_count": len(set(room_ids)),
         "room_ids_sample": sorted(set(room_ids))[:20],
+        "failure_diagnostics": summarize_failure_diagnostics(records),
         "latency_ms": _latency_summary([float(v) for v in latencies]),
+        "benchmark_semaphore_wait_ms": _latency_summary([float(v) for v in semaphore_waits]),
+        "client_request_ms": _latency_summary([float(v) for v in client_request_times]),
+        "client_request_hook_delay_ms": _latency_summary([float(v) for v in client_request_hook_delays]),
+        "client_to_response_headers_ms": _latency_summary([float(v) for v in client_to_response_headers]),
+        "client_transport_to_response_headers_ms": _latency_summary([float(v) for v in client_transport_to_response_headers]),
+        "client_response_body_read_ms": _latency_summary([float(v) for v in client_response_body_reads]),
+        "client_timing_semantics": {
+            "benchmark_semaphore_wait_ms": (
+                "Time spent waiting for the benchmark coroutine semaphore "
+                "before calling HTTPX."
+            ),
+            "client_request_ms": (
+                "Time inside HTTPX AsyncClient.post. This may include "
+                "HTTPX pool wait, connect, write, server handling, response "
+                "headers, and response body read; this runner does not use "
+                "private httpcore trace internals."
+            ),
+            "client_to_response_headers_ms": (
+                "Time from immediately before AsyncClient.post() until the "
+                "documented HTTPX response hook fires after response headers. "
+                "This still includes pool wait, connect, send, server time, "
+                "and response-header transfer."
+            ),
+            "client_response_body_read_ms": (
+                "Time from the documented HTTPX response hook until "
+                "AsyncClient.post() returns with the body read."
+            ),
+        },
+        "overall_client_request_time_ms": _timing_spent_summary(overall_client_request_times),
+        "main_django_logic_time_ms": _timing_spent_summary(main_django_logic_times),
+        "failed_client_latency_ms": _latency_summary([float(v) for v in failed_latencies]),
+        "server_timing_population": {
+            "population": "successful_requests_only",
+            "sample_count": len(ok_records),
+            "failed_requests_excluded": len(failed_records),
+        },
         "server_timing_ms": {
             key: _latency_summary(values)
             for key, values in sorted(
@@ -1661,8 +2281,26 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
                 "pair_index": record.pair_index,
                 "client_message_id": record.client_message_id,
                 "status": record.response_status,
+                "primary_failure_category": primary_failure_category_for_record(record),
                 "error": record.error,
+                "client_exception_type": record.error_type,
+                "semaphore_wait_ms": round(record.semaphore_wait_ms, 2) if record.semaphore_wait_ms is not None else None,
+                "client_request_ms": round(record.client_request_ms, 2) if record.client_request_ms is not None else None,
                 "envelope_count": len(record.payload.get("envelopes") or []),
+                "expected_request_shape": {
+                    "recipient_selector": (
+                        "room_id"
+                        if record.payload.get("room_id")
+                        else "recipient_contact_id"
+                    ),
+                    "requires_sender_device_id": True,
+                    "requires_client_message_id": True,
+                    "requires_message_type": "text",
+                    "requires_encrypted_payload": True,
+                    "requires_encryption_metadata_object": True,
+                    "requires_one_envelope_per_active_sender_and_recipient_device": True,
+                },
+                "success_validation_errors": record.success_validation_errors,
                 "body": record.response_body,
             }
             for record in failed_records[:20]
@@ -1676,15 +2314,161 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
                 "benchmark_phase": record.benchmark_phase,
                 "benchmark_concurrency": record.benchmark_concurrency_header,
                 "latency_ms": round(record.latency_ms, 2) if record.latency_ms is not None else None,
+                "semaphore_wait_ms": round(record.semaphore_wait_ms, 2) if record.semaphore_wait_ms is not None else None,
+                "client_request_ms": round(record.client_request_ms, 2) if record.client_request_ms is not None else None,
+                "client_request_hook_delay_ms": round(record.client_request_hook_delay_ms, 2) if record.client_request_hook_delay_ms is not None else None,
+                "client_to_response_headers_ms": round(record.client_to_response_headers_ms, 2) if record.client_to_response_headers_ms is not None else None,
+                "client_transport_to_response_headers_ms": round(record.client_transport_to_response_headers_ms, 2) if record.client_transport_to_response_headers_ms is not None else None,
+                "client_response_body_read_ms": round(record.client_response_body_read_ms, 2) if record.client_response_body_read_ms is not None else None,
                 "status": record.response_status,
                 "ok": record.ok,
+                "primary_failure_category": primary_failure_category_for_record(record),
                 "server_timing_ms": record.server_timing_ms,
                 "message_id": record.message_id,
                 "room_id": record.room_id,
                 "error": record.error,
+                "client_exception_type": record.error_type,
             }
             for record in records
         ],
+    }
+
+
+def add_throughput_metrics(summary: dict[str, Any], *, elapsed_ms: float) -> None:
+    elapsed_seconds = max(float(elapsed_ms) / 1000.0, 0.001)
+    total_requests = int(summary.get("total_messages") or summary.get("total_requests") or 0)
+    success_count = int(summary.get("success_count") or 0)
+    failure_count = int(summary.get("failure_count") or 0)
+    completed_records = success_count + failure_count
+    summary["elapsed_seconds"] = round(elapsed_seconds, 4)
+    summary["offered_requests_per_second"] = round(total_requests / elapsed_seconds, 2)
+    summary["completed_requests_per_second"] = round(completed_records / elapsed_seconds, 2)
+    summary["successful_messages_per_second"] = round(success_count / elapsed_seconds, 2)
+    summary["failed_requests_per_second"] = round(failure_count / elapsed_seconds, 2)
+    summary["messages_per_second"] = summary["successful_messages_per_second"]
+    summary["messages_per_second_semantics"] = "successful_messages_per_second"
+
+
+def send_direct_message_api_contract() -> dict[str, Any]:
+    return {
+        "method": "POST",
+        "path": "/api/v1/messages/direct/",
+        "request_json": {
+            "recipient_selector": (
+                "Use recipient_contact_id for the first message that creates "
+                "a direct room; use room_id for later messages in that room. "
+                "Do not send both."
+            ),
+            "required_fields": [
+                "sender_device_id",
+                "client_message_id",
+                "message_type",
+                "encrypted_payload",
+                "encryption_metadata",
+                "encryption_version",
+                "client_sent_at",
+                "envelopes",
+            ],
+            "message_type_used_by_benchmark": "text",
+            "envelope_rules": [
+                "One envelope per active sender and recipient device.",
+                "Sender device envelope protocol must be device_sync.",
+                "Recipient device envelope protocol must be double_ratchet.",
+                "Each envelope requires recipient_device_id, protocol, session_reference, wrapped_message_key, key_wrap_metadata, and envelope_version.",
+            ],
+            "recovery_envelopes_used_by_benchmark": [],
+        },
+        "success_response": {
+            "http_status": "201 for a newly stored message, 200 for an idempotent existing message.",
+            "required_json": {
+                "success": True,
+                "data": [
+                    "room_id",
+                    "room_type=direct",
+                    "message_id",
+                    "client_message_id matching the request",
+                    "message_created",
+                    "envelope_count matching request.envelopes length",
+                    "recovery_envelope_count",
+                ],
+            },
+        },
+    }
+
+
+def collect_report_failure_diagnostics(report: dict[str, Any]) -> dict[str, Any]:
+    phases: list[dict[str, Any]] = []
+
+    def add_phase(name: str, summary: dict[str, Any] | None) -> None:
+        if not isinstance(summary, dict):
+            return
+        diagnostics = summary.get("failure_diagnostics") or {}
+        failed_count = int(diagnostics.get("failed_count") or summary.get("failure_count") or 0)
+        if failed_count <= 0:
+            return
+        phases.append(
+            {
+                "phase": name,
+                "concurrency": summary.get("concurrency"),
+                "failed_count": failed_count,
+                "status_counts": summary.get("status_counts"),
+                "top_reasons": diagnostics.get("top_reasons", []),
+                "samples": diagnostics.get("samples", []),
+            }
+        )
+
+    add_phase("warmup", report.get("warmup"))
+    add_phase("connection_warmup", report.get("connection_warmup"))
+    setup = report.get("setup") or {}
+    setup_diagnostics = setup.get("failure_diagnostics") if isinstance(setup, dict) else {}
+    if isinstance(setup_diagnostics, dict) and int(setup_diagnostics.get("failed_count") or 0) > 0:
+        phases.append(
+            {
+                "phase": "setup_pairs",
+                "concurrency": None,
+                "failed_count": setup_diagnostics.get("failed_count"),
+                "status_counts": None,
+                "top_reasons": setup_diagnostics.get("top_reasons", []),
+                "samples": setup_diagnostics.get("failed_samples", []),
+            }
+        )
+    for level in (report.get("benchmark") or {}).get("per_level", []) or []:
+        add_phase(f"benchmark_concurrency_{level.get('concurrency')}", level)
+    add_phase("overall_summary", report.get("summary"))
+
+    cleanup = report.get("cleanup") or {}
+    cleanup_failures = []
+    for name, result in cleanup.items():
+        if isinstance(result, dict) and result.get("success") is False:
+            reason = str(result.get("message") or "cleanup_failed")
+            cleanup_failures.append(
+                {
+                    "component": name,
+                    "reason": reason,
+                    "message": result.get("message"),
+                    "traceback": result.get("traceback"),
+                }
+            )
+    if cleanup_failures:
+        phases.append(
+            {
+                "phase": "cleanup",
+                "concurrency": None,
+                "failed_count": len(cleanup_failures),
+                "status_counts": None,
+                "top_reasons": [
+                    {"reason": item["reason"], "count": 1}
+                    for item in cleanup_failures
+                ],
+                "samples": cleanup_failures,
+            }
+        )
+
+    return {
+        "has_failures": bool(phases or report.get("fatal_error") or cleanup_failures),
+        "fatal_error": report.get("fatal_error"),
+        "failed_phases": phases,
+        "cleanup_failures": cleanup_failures,
     }
 
 
@@ -1724,16 +2508,155 @@ def analyze_benchmark_levels(level_summaries: list[dict[str, Any]]) -> dict[str,
     }
 
 
-def cleanup_messenger_with_django(pairs: list[PairContext]) -> dict[str, Any]:
-    if not CONFIG["CLEANUP_MESSENGER_DJANGO"]:
-        return {"enabled": False, "message": "Messenger Django cleanup disabled."}
-    if CONFIG["MESSENGER_DOCKER_CONTAINER"]:
-        return cleanup_messenger_with_docker_container(pairs)
+async def record_httpx_request_hook(request: httpx.Request) -> None:
+    request_id = str(
+        request.headers.get("X-Myna-Benchmark-Request-Id")
+        or ""
+    ).strip()
+    if request_id:
+        HTTPX_REQUEST_HOOK_AT[request_id] = time.perf_counter()
+
+
+async def record_httpx_response_hook(response: httpx.Response) -> None:
+    request_id = str(
+        response.request.headers.get("X-Myna-Benchmark-Request-Id")
+        or ""
+    ).strip()
+    if request_id:
+        HTTPX_RESPONSE_HOOK_AT[request_id] = time.perf_counter()
+
+
+def apply_httpx_hook_timings(
+    record: SentMessageRecord,
+    *,
+    request_started_at: float,
+    request_finished_at: float,
+) -> None:
+    request_id = str(record.benchmark_request_id or "").strip()
+    if not request_id:
+        return
+
+    request_hook_at = HTTPX_REQUEST_HOOK_AT.pop(request_id, None)
+    response_hook_at = HTTPX_RESPONSE_HOOK_AT.pop(request_id, None)
+    if request_hook_at is not None:
+        record.client_request_hook_delay_ms = (
+            request_hook_at - request_started_at
+        ) * 1000
+    if response_hook_at is not None:
+        record.client_to_response_headers_ms = (
+            response_hook_at - request_started_at
+        ) * 1000
+        record.client_response_body_read_ms = max(
+            0.0,
+            (request_finished_at - response_hook_at) * 1000,
+        )
+        if request_hook_at is not None:
+            record.client_transport_to_response_headers_ms = max(
+                0.0,
+                (response_hook_at - request_hook_at) * 1000,
+            )
+
+
+def pair_user_ids(pairs: list[PairContext]) -> list[str]:
+    user_ids = []
+    for pair in pairs:
+        user_ids.extend([pair.sender.user_id, pair.recipient.user_id])
+    return sorted(set(str(item) for item in user_ids if item))
+
+
+def make_benchmark_http_client() -> httpx.AsyncClient:
+    http_limits = httpx.Limits(
+        max_connections=int(CONFIG["HTTP_MAX_CONNECTIONS"]),
+        max_keepalive_connections=int(CONFIG["HTTP_MAX_KEEPALIVE_CONNECTIONS"]),
+        keepalive_expiry=float(CONFIG["HTTP_KEEPALIVE_EXPIRY_SECONDS"]),
+    )
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=float(CONFIG["REQUEST_TIMEOUT_SECONDS"]),
+        write=10.0,
+        pool=float(CONFIG["HTTP_POOL_TIMEOUT_SECONDS"]),
+    )
+    return httpx.AsyncClient(
+        timeout=timeout,
+        limits=http_limits,
+        follow_redirects=False,
+        event_hooks={
+            "request": [record_httpx_request_hook],
+            "response": [record_httpx_response_hook],
+        },
+    )
+
+
+def invalidate_messenger_user_caches(pairs: list[PairContext]) -> dict[str, Any]:
+    user_ids = pair_user_ids(pairs)
+    if not user_ids:
+        return {"enabled": True, "success": True, "user_count": 0}
+
     root = Path(str(CONFIG["MESSENGER_PROJECT_ROOT"])).resolve()
     if not (root / "manage.py").exists():
-        return {"enabled": True, "success": False, "message": f"manage.py not found at {root}."}
-    sys.path.insert(0, str(root))
+        return {
+            "enabled": True,
+            "success": False,
+            "message": f"manage.py not found at {root}.",
+            "user_count": len(user_ids),
+        }
+
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", str(CONFIG["DJANGO_SETTINGS_MODULE"]))
+
+    try:
+        import django
+
+        django.setup()
+        from apps.e2ee_devices.recovery_services import (
+            invalidate_recovery_active_cache_for_user,
+        )
+        from apps.e2ee_devices.services import (
+            invalidate_active_device_cache_for_user,
+        )
+
+        for user_id in user_ids:
+            invalidate_active_device_cache_for_user(user_id)
+            invalidate_recovery_active_cache_for_user(user_id)
+
+        return {
+            "enabled": True,
+            "success": True,
+            "user_count": len(user_ids),
+            "cache_types": [
+                "active_devices",
+                "recovery_active_bundle",
+            ],
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "success": False,
+            "user_count": len(user_ids),
+            "message": repr(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def reset_messenger_state_for_user_ids(user_ids: list[str]) -> dict[str, Any]:
+    normalized_user_ids = sorted(set(str(item) for item in user_ids if item))
+    if not normalized_user_ids:
+        return {"enabled": True, "success": True, "user_count": 0}
+
+    root = Path(str(CONFIG["MESSENGER_PROJECT_ROOT"])).resolve()
+    if not (root / "manage.py").exists():
+        return {
+            "enabled": True,
+            "success": False,
+            "message": f"manage.py not found at {root}.",
+            "user_count": len(normalized_user_ids),
+        }
+
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", str(CONFIG["DJANGO_SETTINGS_MODULE"]))
+
     try:
         import django
         from django.db.models import Q
@@ -1741,36 +2664,58 @@ def cleanup_messenger_with_django(pairs: list[PairContext]) -> dict[str, Any]:
         django.setup()
         from apps.chat_messages.models import ContactDeliveryPolicy, DirectContactState, Message
         from apps.e2ee_devices.models import Device, RecoveryBundle
+        from apps.e2ee_devices.recovery_services import (
+            invalidate_recovery_active_cache_for_user,
+        )
+        from apps.e2ee_devices.services import (
+            invalidate_active_device_cache_for_user,
+        )
         from apps.realtime.models import RealtimeOutboxEvent, RealtimeTicket
         from apps.rooms.models import Room, RoomMember
 
-        user_ids = []
-        device_ids = []
-        for pair in pairs:
-            user_ids.extend([pair.sender.user_id, pair.recipient.user_id])
-            device_ids.extend([pair.sender_device.device_id, pair.recipient_device.device_id])
-        user_ids = sorted(set(str(item) for item in user_ids if item))
-        device_ids = sorted(set(str(item) for item in device_ids if item))
+        for user_id in normalized_user_ids:
+            invalidate_active_device_cache_for_user(user_id)
+            invalidate_recovery_active_cache_for_user(user_id)
 
-        if not user_ids and not device_ids:
-            return {"enabled": True, "success": True, "message": "No Messenger IDs to clean."}
-
-        target_groups = [f"user.{user_id}" for user_id in user_ids] + [f"device.{device_id}" for device_id in device_ids]
-        outbox_deleted, _ = RealtimeOutboxEvent.objects.filter(target_group__in=target_groups).delete()
-        tickets_deleted, _ = RealtimeTicket.objects.filter(Q(user_id__in=user_ids) | Q(device_id__in=device_ids)).delete()
-        room_ids = list(RoomMember.objects.filter(user_id__in=user_ids).values_list("room_id", flat=True).distinct())
+        device_ids = list(
+            Device.objects.filter(user_id__in=normalized_user_ids).values_list(
+                "id",
+                flat=True,
+            )
+        )
+        device_ids = [str(item) for item in device_ids]
+        target_groups = [
+            f"user.{user_id}"
+            for user_id in normalized_user_ids
+        ] + [
+            f"device.{device_id}"
+            for device_id in device_ids
+        ]
+        room_ids = list(
+            RoomMember.objects.filter(user_id__in=normalized_user_ids)
+            .values_list("room_id", flat=True)
+            .distinct()
+        )
         message_ids = list(Message.objects.filter(room_id__in=room_ids).values_list("id", flat=True))
+
+        outbox_deleted, _ = RealtimeOutboxEvent.objects.filter(target_group__in=target_groups).delete()
+        tickets_deleted, _ = RealtimeTicket.objects.filter(Q(user_id__in=normalized_user_ids) | Q(device_id__in=device_ids)).delete()
         messages_deleted, _ = Message.objects.filter(id__in=message_ids).delete()
-        contact_states_deleted, _ = DirectContactState.objects.filter(Q(owner_user_id__in=user_ids) | Q(contact_user_id__in=user_ids)).delete()
+        contact_states_deleted, _ = DirectContactState.objects.filter(Q(owner_user_id__in=normalized_user_ids) | Q(contact_user_id__in=normalized_user_ids)).delete()
         rooms_deleted, _ = Room.objects.filter(id__in=room_ids).delete()
-        policies_deleted, _ = ContactDeliveryPolicy.objects.filter(Q(owner_user_id__in=user_ids) | Q(target_user_id__in=user_ids)).delete()
-        recovery_deleted, _ = RecoveryBundle.objects.filter(user_id__in=user_ids).delete()
-        devices_deleted, _ = Device.objects.filter(Q(user_id__in=user_ids) | Q(id__in=device_ids)).delete()
+        policies_deleted, _ = ContactDeliveryPolicy.objects.filter(Q(owner_user_id__in=normalized_user_ids) | Q(target_user_id__in=normalized_user_ids)).delete()
+        recovery_deleted, _ = RecoveryBundle.objects.filter(user_id__in=normalized_user_ids).delete()
+        devices_deleted, _ = Device.objects.filter(Q(user_id__in=normalized_user_ids) | Q(id__in=device_ids)).delete()
+
+        for user_id in normalized_user_ids:
+            invalidate_active_device_cache_for_user(user_id)
+            invalidate_recovery_active_cache_for_user(user_id)
+
         return {
             "enabled": True,
             "success": True,
-            "user_count": len(user_ids),
-            "device_count": len(device_ids),
+            "user_count": len(normalized_user_ids),
+            "device_count_targeted": len(device_ids),
             "room_count_targeted": len(room_ids),
             "message_count_targeted": len(message_ids),
             "deleted": {
@@ -1783,6 +2728,113 @@ def cleanup_messenger_with_django(pairs: list[PairContext]) -> dict[str, Any]:
                 "realtime_tickets": tickets_deleted,
                 "realtime_outbox_events": outbox_deleted,
             },
+            "cache_invalidated": True,
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "success": False,
+            "user_count": len(normalized_user_ids),
+            "message": repr(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def cleanup_messenger_with_django(pairs: list[PairContext]) -> dict[str, Any]:
+    if not CONFIG["CLEANUP_MESSENGER_DJANGO"]:
+        return {"enabled": False, "message": "Messenger Django cleanup disabled."}
+    if CONFIG["MESSENGER_DOCKER_CONTAINER"]:
+        return cleanup_messenger_with_docker_container(pairs)
+    root = Path(str(CONFIG["MESSENGER_PROJECT_ROOT"])).resolve()
+    if not (root / "manage.py").exists():
+        return {"enabled": True, "success": False, "message": f"manage.py not found at {root}."}
+    sys.path.insert(0, str(root))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", str(CONFIG["DJANGO_SETTINGS_MODULE"]))
+    try:
+        import django
+        from django.db import OperationalError, close_old_connections, connections
+        from django.db.models import Q
+
+        django.setup()
+        from apps.chat_messages.models import ContactDeliveryPolicy, DirectContactState, Message
+        from apps.e2ee_devices.models import Device, RecoveryBundle
+        from apps.realtime.models import RealtimeOutboxEvent, RealtimeTicket
+        from apps.rooms.models import Room, RoomMember
+
+        device_ids = []
+        user_ids = pair_user_ids(pairs)
+        for pair in pairs:
+            device_ids.extend([pair.sender_device.device_id, pair.recipient_device.device_id])
+        device_ids = sorted(set(str(item) for item in device_ids if item))
+
+        if not user_ids and not device_ids:
+            return {"enabled": True, "success": True, "message": "No Messenger IDs to clean."}
+
+        cache_before = invalidate_messenger_user_caches(pairs)
+        target_groups = [f"user.{user_id}" for user_id in user_ids] + [f"device.{device_id}" for device_id in device_ids]
+
+        def delete_target_data() -> dict[str, Any]:
+            outbox_deleted, _ = RealtimeOutboxEvent.objects.filter(target_group__in=target_groups).delete()
+            tickets_deleted, _ = RealtimeTicket.objects.filter(Q(user_id__in=user_ids) | Q(device_id__in=device_ids)).delete()
+            room_ids = list(RoomMember.objects.filter(user_id__in=user_ids).values_list("room_id", flat=True).distinct())
+            message_ids = list(Message.objects.filter(room_id__in=room_ids).values_list("id", flat=True))
+            messages_deleted, _ = Message.objects.filter(id__in=message_ids).delete()
+            contact_states_deleted, _ = DirectContactState.objects.filter(Q(owner_user_id__in=user_ids) | Q(contact_user_id__in=user_ids)).delete()
+            rooms_deleted, _ = Room.objects.filter(id__in=room_ids).delete()
+            policies_deleted, _ = ContactDeliveryPolicy.objects.filter(Q(owner_user_id__in=user_ids) | Q(target_user_id__in=user_ids)).delete()
+            recovery_deleted, _ = RecoveryBundle.objects.filter(user_id__in=user_ids).delete()
+            devices_deleted, _ = Device.objects.filter(Q(user_id__in=user_ids) | Q(id__in=device_ids)).delete()
+            return {
+                "room_ids": room_ids,
+                "message_ids": message_ids,
+                "deleted": {
+                    "messages_and_cascades": messages_deleted,
+                    "direct_contact_states": contact_states_deleted,
+                    "rooms_and_members": rooms_deleted,
+                    "devices_and_prekeys": devices_deleted,
+                    "contact_policies": policies_deleted,
+                    "recovery_bundles": recovery_deleted,
+                    "realtime_tickets": tickets_deleted,
+                    "realtime_outbox_events": outbox_deleted,
+                },
+            }
+
+        attempts = max(1, int(CONFIG["CLEANUP_DB_RETRY_ATTEMPTS"]))
+        delay_seconds = max(0.0, float(CONFIG["CLEANUP_DB_RETRY_DELAY_SECONDS"]))
+        cleanup_attempts = 0
+        last_operational_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            cleanup_attempts = attempt
+            try:
+                close_old_connections()
+                connections.close_all()
+                deleted_result = delete_target_data()
+                break
+            except OperationalError as exc:
+                if "1040" not in repr(exc) and "Too many connections" not in repr(exc):
+                    raise
+                last_operational_error = exc
+                connections.close_all()
+                if attempt >= attempts:
+                    raise
+                time.sleep(delay_seconds * attempt)
+        else:
+            raise last_operational_error or RuntimeError("Messenger cleanup retry loop exhausted.")
+
+        cache_after = invalidate_messenger_user_caches(pairs)
+        room_ids = deleted_result["room_ids"]
+        message_ids = deleted_result["message_ids"]
+        return {
+            "enabled": True,
+            "success": True,
+            "user_count": len(user_ids),
+            "device_count": len(device_ids),
+            "room_count_targeted": len(room_ids),
+            "message_count_targeted": len(message_ids),
+            "deleted": deleted_result["deleted"],
+            "db_cleanup_attempts": cleanup_attempts,
+            "cache_invalidated_before_delete": cache_before,
+            "cache_invalidated_after_delete": cache_after,
         }
     except Exception as exc:
         return {"enabled": True, "success": False, "message": repr(exc), "traceback": traceback.format_exc()}
@@ -1837,11 +2889,16 @@ from apps.chat_messages.models import (
     MessageRecoveryEnvelope,
 )
 from apps.e2ee_devices.models import Device, OneTimePreKey, RecoveryBundle
+from apps.e2ee_devices.recovery_services import invalidate_recovery_active_cache_for_user
+from apps.e2ee_devices.services import invalidate_active_device_cache_for_user
 from apps.realtime.models import RealtimeOutboxEvent, RealtimeTicket
 from apps.rooms.models import Room, RoomMember
 
 user_ids = {user_ids!r}
 device_ids = {device_ids!r}
+for user_id in user_ids:
+    invalidate_active_device_cache_for_user(user_id)
+    invalidate_recovery_active_cache_for_user(user_id)
 target_groups = [f"user.{{user_id}}" for user_id in user_ids] + [f"device.{{device_id}}" for device_id in device_ids]
 room_ids = list(RoomMember.objects.filter(user_id__in=user_ids).values_list("room_id", flat=True).distinct())
 message_ids = list(Message.objects.filter(room_id__in=room_ids).values_list("id", flat=True))
@@ -1858,6 +2915,9 @@ policies_deleted, _ = ContactDeliveryPolicy.objects.filter(Q(owner_user_id__in=u
 prekeys_deleted, _ = OneTimePreKey.objects.filter(device_id__in=device_ids).delete()
 recovery_deleted, _ = RecoveryBundle.objects.filter(user_id__in=user_ids).delete()
 devices_deleted, _ = Device.objects.filter(Q(user_id__in=user_ids) | Q(id__in=device_ids)).delete()
+for user_id in user_ids:
+    invalidate_active_device_cache_for_user(user_id)
+    invalidate_recovery_active_cache_for_user(user_id)
 
 print(json.dumps({{
     "user_count": len(user_ids),
@@ -1878,6 +2938,7 @@ print(json.dumps({{
         "realtime_tickets": tickets_deleted,
         "realtime_outbox_events": outbox_deleted,
     }},
+    "cache_invalidated": True,
 }}))
 """
     try:
@@ -1968,7 +3029,7 @@ async def cleanup_identity_users(client: httpx.AsyncClient, pairs: list[PairCont
     }
 
 
-def write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
+def write_reports(report: dict[str, Any]) -> tuple[Path, Path | None]:
     report_dir = Path(str(CONFIG["REPORT_DIR"]))
     report_dir.mkdir(parents=True, exist_ok=True)
     report_file_prefix = safe_report_filename_part(
@@ -1988,13 +3049,19 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
     report["report_file_stem"] = report_file_stem
     report["report_file_timestamp"] = report_file_timestamp
     json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    if not CONFIG["WRITE_LEGACY_MARKDOWN"]:
+        return json_path, None
 
     ladder_rows = []
     for item in report.get("benchmark", {}).get("per_level", []):
         lat = item.get("latency_ms", {})
+        overall_time = item.get("overall_client_request_time_ms", {})
+        main_django_time = item.get("main_django_logic_time_ms", {})
         ladder_rows.append(
             f"| {item.get('concurrency')} | {item.get('total_messages')} | {item.get('success_count')} | {item.get('failure_count')} | "
-            f"{item.get('unique_room_id_count')} | {lat.get('avg')} | {lat.get('p95')} | {item.get('total_send_elapsed_ms')} | {item.get('messages_per_second')} |"
+            f"{item.get('unique_room_id_count')} | {lat.get('avg')} | {lat.get('p95')} | {item.get('total_send_elapsed_ms')} | "
+            f"{overall_time.get('total')} | {main_django_time.get('total')} | {main_django_time.get('avg')} | {main_django_time.get('p95')} | "
+            f"{item.get('offered_requests_per_second')} | {item.get('successful_messages_per_second')} | {item.get('failed_requests_per_second')} |"
         )
     ladder_table = "\n".join(ladder_rows)
     per_level_server_timing = [
@@ -2093,6 +3160,12 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
 {json.dumps(report.get('config', {}), indent=2, default=str)}
 ```
 
+## Send Direct Message API Contract
+
+```json
+{json.dumps(report.get('send_direct_message_api_contract', {}), indent=2, default=str)}
+```
+
 ## Service Preflight
 
 ```json
@@ -2103,6 +3176,18 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
 
 ```json
 {json.dumps(report.get('runtime_environment', {}), indent=2, default=str)}
+```
+
+## Effective Runtime Config
+
+```json
+{json.dumps(report.get('effective_runtime_config', {}), indent=2, default=str)}
+```
+
+## Database Connection Telemetry
+
+```json
+{json.dumps(report.get('database_connection_telemetry', {}), indent=2, default=str)}
 ```
 
 ## Setup
@@ -2119,14 +3204,20 @@ def write_reports(report: dict[str, Any]) -> tuple[Path, Path]:
 
 ## Benchmark Ladder
 
-| Concurrency | Messages | Success | Failure | Unique rooms | Avg latency ms | P95 latency ms | Send elapsed ms | Messages/sec |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Concurrency | Requests | Success | Failure | Unique rooms | Avg latency ms | P95 latency ms | Send elapsed ms | Overall req total ms | Main Django total ms | Main Django avg ms | Main Django p95 ms | Offered req/s | Successful msg/s | Failed req/s |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 {ladder_table}
 
 ## Benchmark Analysis
 
 ```json
 {json.dumps(report.get('benchmark', {}).get('analysis', {}), indent=2, default=str)}
+```
+
+## Failure Diagnostics
+
+```json
+{json.dumps(report.get('failure_diagnostics', {}), indent=2, default=str)}
 ```
 
 ## Overall Summary
@@ -2208,41 +3299,58 @@ async def run() -> int:
         "identity_base_url_source": CONFIG["IDENTITY_BASE_URL_SOURCE"],
         "messenger_base_url_source": CONFIG["MESSENGER_BASE_URL_SOURCE"],
         "traffic_mode": "distributed_pairs",
+        "send_direct_message_api_contract": send_direct_message_api_contract(),
         "config": CONFIG,
+        "effective_runtime_config": {
+            "benchmark_http": {
+                "MYNA_HTTP_MAX_CONNECTIONS": CONFIG["HTTP_MAX_CONNECTIONS"],
+                "MYNA_HTTP_MAX_KEEPALIVE_CONNECTIONS": CONFIG["HTTP_MAX_KEEPALIVE_CONNECTIONS"],
+                "MYNA_HTTP_KEEPALIVE_EXPIRY_SECONDS": CONFIG["HTTP_KEEPALIVE_EXPIRY_SECONDS"],
+                "MYNA_HTTP_POOL_TIMEOUT_SECONDS": CONFIG["HTTP_POOL_TIMEOUT_SECONDS"],
+                "MYNA_BENCHMARK_COOLDOWN_SECONDS": CONFIG["BENCHMARK_COOLDOWN_SECONDS"],
+                "MYNA_CONNECTION_WARMUP_CONCURRENCY": CONFIG["CONNECTION_WARMUP_CONCURRENCY"],
+            }
+        },
         "runtime_environment": collect_runtime_environment_snapshot(),
         "passed": False,
     }
     pairs: list[PairContext] = []
     all_records: list[SentMessageRecord] = []
     docker_stats_sampler = DockerStatsSampler()
-    http_limits = httpx.Limits(
-        max_connections=int(CONFIG["HTTP_MAX_CONNECTIONS"]),
-        max_keepalive_connections=int(CONFIG["HTTP_MAX_KEEPALIVE_CONNECTIONS"]),
-        keepalive_expiry=float(CONFIG["HTTP_KEEPALIVE_EXPIRY_SECONDS"]),
-    )
-    timeout = httpx.Timeout(
-        connect=10.0,
-        read=float(CONFIG["REQUEST_TIMEOUT_SECONDS"]),
-        write=10.0,
-        pool=float(CONFIG["HTTP_POOL_TIMEOUT_SECONDS"]),
-    )
+    report["httpx_client_lifecycle"] = {
+        "setup_client": "preflight, pair setup, and room-creation warmup",
+        "connection_warmup_client": "optional unmeasured connection warmup only",
+        "measured_clients": "fresh AsyncClient per measured concurrency level",
+        "cleanup_client": "identity cleanup only",
+    }
 
-    async with httpx.AsyncClient(timeout=timeout, limits=http_limits, follow_redirects=False) as client:
-        try:
-            report["preflight"] = await preflight_service_urls(client)
+    try:
+        async with make_benchmark_http_client() as setup_client:
+            await add_mysql_telemetry(report, "initial_pre_benchmark")
+            report["preflight"] = await preflight_service_urls(setup_client)
             await docker_stats_sampler.start("setup_pairs")
             try:
-                pairs = await setup_pairs(client, pair_count)
+                pairs = await setup_pairs(setup_client, pair_count)
             finally:
                 await docker_stats_sampler.stop()
             report["setup"] = {
                 "pair_count": len(pairs),
                 "sender_user_ids_sample": [p.sender.user_id for p in pairs[:10]],
                 "recipient_user_ids_sample": [p.recipient.user_id for p in pairs[:10]],
+                "failure_diagnostics": summarize_setup_step_records(pair_count, len(pairs)),
                 "docker_stats": docker_stats_sampler.phase_summary("setup_pairs"),
             }
 
             pairs_by_index = {pair.index: pair for pair in pairs}
+            report["pre_warmup_cache_invalidation"] = await asyncio.to_thread(
+                invalidate_messenger_user_caches,
+                pairs,
+            )
+            if not report["pre_warmup_cache_invalidation"].get("success", False):
+                raise RuntimeError(
+                    "Pre-warmup Messenger cache invalidation failed: "
+                    f"{report['pre_warmup_cache_invalidation']}"
+                )
             sequence = 0
 
             if CONFIG["WARMUP_ALL_PAIRS"]:
@@ -2261,7 +3369,7 @@ async def run() -> int:
                 # Keep warmup concurrency modest; it is not measured as benchmark latency.
                 await docker_stats_sampler.start(warmup_phase)
                 try:
-                    await send_concurrently(client, records=warmup_records, concurrency=min(10, len(warmup_records)))
+                    await send_concurrently(setup_client, records=warmup_records, concurrency=min(10, len(warmup_records)))
                 finally:
                     await docker_stats_sampler.stop()
                 apply_room_ids_to_pairs(warmup_records, pairs_by_index)
@@ -2272,18 +3380,22 @@ async def run() -> int:
                 if warmup_summary["failure_count"] > 0:
                     raise RuntimeError("Warmup failed; direct rooms were not created for all pairs.")
 
-            sequence, connection_warmup_summary = await run_connection_warmup(
-                client,
-                pairs=pairs,
-                pairs_by_index=pairs_by_index,
-                sequence_start=sequence,
-                max_level=max(levels),
-            )
+            await add_mysql_telemetry(report, "before_connection_warmup")
+            async with make_benchmark_http_client() as connection_warmup_client:
+                sequence, connection_warmup_summary = await run_connection_warmup(
+                    connection_warmup_client,
+                    pairs=pairs,
+                    pairs_by_index=pairs_by_index,
+                    sequence_start=sequence,
+                    max_level=max(levels),
+                )
+            await add_mysql_telemetry(report, "after_connection_warmup")
             report["connection_warmup"] = connection_warmup_summary
             if connection_warmup_summary.get("failure_count", 0) > 0:
                 raise RuntimeError("Connection warmup failed; measured benchmark was not started.")
 
             per_level: list[dict[str, Any]] = []
+            print_benchmark_level_table_header()
             for level in levels:
                 selected_pairs = pairs[:level]
                 level_records = []
@@ -2303,25 +3415,33 @@ async def run() -> int:
                 )
                 log_progress(f"Level concurrency={level}: sending {len(level_records)} messages from {len(selected_pairs)} different pairs...")
                 level_phase = f"concurrency_{level}"
+                await add_mysql_telemetry(report, f"before_concurrency_{level}")
                 send_started = time.perf_counter()
                 await docker_stats_sampler.start(level_phase)
                 elapsed_ms = 0.0
                 try:
-                    await send_concurrently(client, records=level_records, concurrency=level)
+                    async with make_benchmark_http_client() as measured_client:
+                        await send_concurrently(measured_client, records=level_records, concurrency=level)
                 finally:
                     elapsed_ms = (time.perf_counter() - send_started) * 1000
                     await docker_stats_sampler.stop()
                 apply_room_ids_to_pairs(level_records, pairs_by_index)
                 level_summary = summarize_records(level_records, concurrency=level)
                 level_summary["total_send_elapsed_ms"] = round(elapsed_ms, 2)
-                level_summary["messages_per_second"] = round(len(level_records) / max(elapsed_ms / 1000, 0.001), 2)
+                add_throughput_metrics(level_summary, elapsed_ms=elapsed_ms)
                 level_summary["docker_stats"] = docker_stats_sampler.phase_summary(level_phase)
+                await add_mysql_telemetry(report, f"after_concurrency_{level}")
                 per_level.append(level_summary)
                 all_records.extend(level_records)
+                print_benchmark_level_table_row(level_summary)
                 log_progress(
                     f"Level concurrency={level} done: success={level_summary['success_count']}, "
                     f"failure={level_summary['failure_count']}, rooms={level_summary['unique_room_id_count']}, "
                     f"avg_ms={level_summary['latency_ms'].get('avg')}, p95_ms={level_summary['latency_ms'].get('p95')}, "
+                    f"overall_req_total_ms={level_summary['overall_client_request_time_ms'].get('total')}, "
+                    f"main_django_total_ms={level_summary['main_django_logic_time_ms'].get('total')}, "
+                    f"main_django_avg_ms={level_summary['main_django_logic_time_ms'].get('avg')}, "
+                    f"main_django_p95_ms={level_summary['main_django_logic_time_ms'].get('p95')}, "
                     f"msg_per_sec={level_summary.get('messages_per_second')}"
                 )
                 if CONFIG["STOP_ON_FIRST_FAILED_LEVEL"] and level_summary.get("failure_count", 0) > 0:
@@ -2352,43 +3472,59 @@ async def run() -> int:
                 and summary.get("unique_room_id_count") >= max(levels)
             )
 
-        except Exception as exc:
-            await docker_stats_sampler.stop()
-            report["fatal_error"] = repr(exc)
-            report["traceback"] = traceback.format_exc()
-            report.setdefault("summary", summarize_records(all_records, concurrency="distributed_ladder"))
-            report["docker_stats"] = docker_stats_sampler.summary()
-        finally:
-            await docker_stats_sampler.stop()
-            set_api_phase("cleanup")
-            log_progress("Starting cleanup...")
-            messenger_cleanup = await asyncio.to_thread(cleanup_messenger_with_django, pairs)
-            identity_cleanup = await cleanup_identity_users(client, pairs)
-            report["cleanup"] = {"messenger": messenger_cleanup, "identity": identity_cleanup}
-            report["cleanup_success"] = bool(
-                messenger_cleanup.get("success", True)
-                and identity_cleanup.get("success", True)
-            )
-            report["api_timings"] = summarize_api_calls(API_CALL_RECORDS)
-            report["finished_at"] = utc_now_iso()
-            json_path, md_path = write_reports(report)
+    except Exception as exc:
+        await docker_stats_sampler.stop()
+        report["fatal_error"] = repr(exc)
+        report["traceback"] = traceback.format_exc()
+        report.setdefault(
+            "setup",
+            {
+                "pair_count": len(pairs),
+                "failure_diagnostics": summarize_setup_step_records(pair_count, len(pairs)),
+                "docker_stats": docker_stats_sampler.phase_summary("setup_pairs"),
+            },
+        )
+        report.setdefault("summary", summarize_records(all_records, concurrency="distributed_ladder"))
+        report["docker_stats"] = docker_stats_sampler.summary()
+    finally:
+        await docker_stats_sampler.stop()
+        set_api_phase("cleanup")
+        log_progress("Starting cleanup...")
+        await add_mysql_telemetry(report, "before_cleanup")
+        messenger_cleanup = await asyncio.to_thread(cleanup_messenger_with_django, pairs)
+        async with make_benchmark_http_client() as cleanup_client:
+            identity_cleanup = await cleanup_identity_users(cleanup_client, pairs)
+        report["cleanup"] = {"messenger": messenger_cleanup, "identity": identity_cleanup}
+        report["cleanup_success"] = bool(
+            messenger_cleanup.get("success", True)
+            and identity_cleanup.get("success", True)
+        )
+        await add_mysql_telemetry(report, "after_cleanup")
+        report["api_timings"] = summarize_api_calls(API_CALL_RECORDS)
+        report["finished_at"] = utc_now_iso()
+        report["failure_diagnostics"] = collect_report_failure_diagnostics(report)
+        json_path, md_path = write_reports(report)
+        if md_path is not None:
             log_progress(f"Reports written: {json_path} and {md_path}")
-            print(json.dumps({
-                "passed": report.get("passed"),
-                "run_id": TEST_RUN_ID,
-                "service_url_mode": report.get("service_url_mode"),
-                "identity_base_url": report.get("identity_base_url"),
-                "messenger_base_url": report.get("messenger_base_url"),
-                "json_report": str(json_path),
-                "markdown_report": str(md_path),
-                "summary": report.get("summary"),
-                "benchmark_analysis": (report.get("benchmark") or {}).get("analysis"),
-                "runtime_environment": report.get("runtime_environment"),
-                "api_timings_by_endpoint": (report.get("api_timings") or {}).get("by_endpoint"),
-                "cleanup": report.get("cleanup"),
-                "cleanup_success": report.get("cleanup_success"),
-                "fatal_error": report.get("fatal_error"),
-            }, indent=2, default=str))
+        else:
+            log_progress(f"Primary JSON report written: {json_path}")
+        print(json.dumps({
+            "passed": report.get("passed"),
+            "run_id": TEST_RUN_ID,
+            "service_url_mode": report.get("service_url_mode"),
+            "identity_base_url": report.get("identity_base_url"),
+            "messenger_base_url": report.get("messenger_base_url"),
+            "json_report": str(json_path),
+            "markdown_report": str(md_path) if md_path is not None else None,
+            "summary": report.get("summary"),
+            "benchmark_analysis": (report.get("benchmark") or {}).get("analysis"),
+            "failure_diagnostics": report.get("failure_diagnostics"),
+            "runtime_environment": report.get("runtime_environment"),
+            "api_timings_by_endpoint": (report.get("api_timings") or {}).get("by_endpoint"),
+            "cleanup": report.get("cleanup"),
+            "cleanup_success": report.get("cleanup_success"),
+            "fatal_error": report.get("fatal_error"),
+        }, indent=2, default=str))
 
     return 0 if report.get("passed") else 1
 
