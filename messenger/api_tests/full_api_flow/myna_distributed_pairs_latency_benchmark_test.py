@@ -17,6 +17,14 @@ Traffic model:
   direct rooms and DirectContactState.
 - Benchmark ladder sends at concurrency K using the first K pairs, one message per pair.
   When warmup is enabled, benchmark messages use room_id, matching real existing-chat flow.
+- Measured traffic uses one persistent HTTPX AsyncClient per simulated sender/pair.
+  Each active user owns an independent one-connection pool, matching many real clients
+  better than one shared benchmark-side pool.
+- Immediately before each measured level, the selected clients issue an unmeasured
+  lightweight Messenger health request so their HTTP/1.1 connections are hot.
+- A coordinated start gate releases all selected users together. Per-request latency
+  starts after gate release when that user's request is dispatched, while dispatch skew
+  is reported separately so load-generator scheduling cannot hide inside server latency.
 
 Install:
     pip install httpx cryptography
@@ -60,6 +68,7 @@ import sys
 import time
 import traceback
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -154,6 +163,7 @@ CONFIG: dict[str, Any] = {
     "HTTP_POOL_TIMEOUT_SECONDS": float(os.getenv("MYNA_HTTP_POOL_TIMEOUT_SECONDS", "10")),
     "CONNECTION_WARMUP_ENABLED": os.getenv("MYNA_CONNECTION_WARMUP_ENABLED", "true").strip().lower() == "true",
     "CONNECTION_WARMUP_CONCURRENCY": int(os.getenv("MYNA_CONNECTION_WARMUP_CONCURRENCY", "100")),
+    "ACTIVE_CLIENT_SETTLE_SECONDS": float(os.getenv("MYNA_ACTIVE_CLIENT_SETTLE_SECONDS", "0.10")),
     "STOP_ON_FIRST_FAILED_LEVEL": os.getenv("MYNA_STOP_ON_FIRST_FAILED_LEVEL", "false").strip().lower() == "true",
     "DOCKER_STATS_ENABLED": os.getenv("MYNA_DOCKER_STATS_ENABLED", "true" if SERVICE_URL_MODE == "docker" else "false").strip().lower() == "true",
     "DOCKER_STATS_INTERVAL_SECONDS": float(os.getenv("MYNA_DOCKER_STATS_INTERVAL_SECONDS", "1")),
@@ -1277,9 +1287,19 @@ class SentMessageRecord:
     client_to_response_headers_ms: float | None = None
     client_transport_to_response_headers_ms: float | None = None
     client_response_body_read_ms: float | None = None
+    httpx_trace_event_at: dict[str, float] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    httpx_trace_ms: dict[str, float] = field(
+        default_factory=dict,
+    )
+    httpx_trace_first_event_name: str | None = None
+    httpx_trace_used_new_tcp_connection: bool | None = None
     benchmark_request_id: str | None = None
     benchmark_phase: str | None = None
     benchmark_concurrency_header: int | None = None
+    load_generator_dispatch_skew_ms: float | None = None
 
     @property
     def response_data(self) -> dict[str, Any]:
@@ -1949,52 +1969,359 @@ def validate_direct_send_payload_shape(payload: dict[str, Any]) -> None:
         raise RuntimeError("Direct send payload has duplicate recipient_device_id envelopes.")
 
 
-async def send_one_message(client: httpx.AsyncClient, *, record: SentMessageRecord, semaphore: asyncio.Semaphore) -> None:
+async def send_one_message(
+    client: httpx.AsyncClient,
+    *,
+    record: SentMessageRecord,
+    semaphore: asyncio.Semaphore,
+) -> None:
     semaphore_wait_started = time.perf_counter()
+
     async with semaphore:
         semaphore_acquired = time.perf_counter()
         record.semaphore_wait_ms = (
             semaphore_acquired - semaphore_wait_started
         ) * 1000
-        url = api_url(CONFIG["MESSENGER_BASE_URL"], "/api/v1/messages/direct/")
+
+        url = api_url(
+            CONFIG["MESSENGER_BASE_URL"],
+            "/api/v1/messages/direct/",
+        )
         headers = dict(HTTP_HEADERS)
         headers["Authorization"] = f"Bearer {record.sender_token}"
+
         if record.benchmark_request_id:
             headers["X-Myna-Benchmark-Run-Id"] = TEST_RUN_ID
             headers["X-Myna-Benchmark-Request-Id"] = record.benchmark_request_id
-            headers["X-Myna-Benchmark-Phase"] = record.benchmark_phase or CURRENT_PHASE
-            headers["X-Myna-Benchmark-Concurrency"] = str(record.benchmark_concurrency_header or "")
+            headers["X-Myna-Benchmark-Phase"] = (
+                record.benchmark_phase or CURRENT_PHASE
+            )
+            headers["X-Myna-Benchmark-Concurrency"] = str(
+                record.benchmark_concurrency_header or ""
+            )
+
+        # Trace state is per measured request. Clear it in case a record is ever
+        # retried or reused by future benchmark code.
+        record.httpx_trace_event_at.clear()
+        record.httpx_trace_ms.clear()
+        record.httpx_trace_first_event_name = None
+        record.httpx_trace_used_new_tcp_connection = None
+
         start = time.perf_counter()
+        trace_handler = make_httpx_trace_handler(record)
+
         try:
-            response = await client.post(url, json=record.payload, headers=headers)
+            response = await client.post(
+                url,
+                json=record.payload,
+                headers=headers,
+                extensions={"trace": trace_handler},
+            )
             finished = time.perf_counter()
+
             record.client_request_ms = (finished - start) * 1000
             record.latency_ms = record.client_request_ms
+
             apply_httpx_hook_timings(
                 record,
                 request_started_at=start,
                 request_finished_at=finished,
             )
+            apply_httpx_trace_timings(
+                record,
+                request_started_at=start,
+                request_finished_at=finished,
+            )
+
             record.response_status = response.status_code
             record.response_body = json_or_text(response)
-            record_api_call("POST", url, response.status_code, record.latency_ms, record.ok)
+            record_api_call(
+                "POST",
+                url,
+                response.status_code,
+                record.latency_ms,
+                record.ok,
+            )
         except Exception as exc:
             finished = time.perf_counter()
+
             record.client_request_ms = (finished - start) * 1000
             record.latency_ms = record.client_request_ms
+
             apply_httpx_hook_timings(
                 record,
                 request_started_at=start,
                 request_finished_at=finished,
             )
+            apply_httpx_trace_timings(
+                record,
+                request_started_at=start,
+                request_finished_at=finished,
+            )
+
             record.error = repr(exc)
             record.error_type = exc.__class__.__name__
-            record_api_call("POST", url, None, record.latency_ms, False, repr(exc))
+            record_api_call(
+                "POST",
+                url,
+                None,
+                record.latency_ms,
+                False,
+                repr(exc),
+            )
 
 
 async def send_concurrently(client: httpx.AsyncClient, *, records: list[SentMessageRecord], concurrency: int) -> None:
     semaphore = asyncio.Semaphore(max(1, concurrency))
     await asyncio.gather(*(send_one_message(client, record=record, semaphore=semaphore) for record in records))
+
+
+class ActiveUserStartGate:
+    """Barrier used only by the load generator to coordinate one request per user."""
+
+    def __init__(self, expected: int) -> None:
+        if expected < 1:
+            raise ValueError("ActiveUserStartGate expected must be >= 1")
+        self.expected = expected
+        self._ready_count = 0
+        self._ready_lock = asyncio.Lock()
+        self._all_ready = asyncio.Event()
+        self._release = asyncio.Event()
+        self.released_at: float | None = None
+
+    async def arrive_and_wait(self) -> float:
+        async with self._ready_lock:
+            self._ready_count += 1
+            if self._ready_count == self.expected:
+                self._all_ready.set()
+            elif self._ready_count > self.expected:
+                raise RuntimeError("Active-user start gate received too many participants")
+
+        await self._release.wait()
+        if self.released_at is None:
+            raise RuntimeError("Active-user start gate released without a timestamp")
+        return self.released_at
+
+    async def release_when_ready(self) -> float:
+        await self._all_ready.wait()
+        self.released_at = time.perf_counter()
+        self._release.set()
+        return self.released_at
+
+
+async def send_one_active_user_message(
+    client: httpx.AsyncClient,
+    *,
+    record: SentMessageRecord,
+    start_gate: ActiveUserStartGate,
+) -> None:
+    url = api_url(
+        CONFIG["MESSENGER_BASE_URL"],
+        "/api/v1/messages/direct/",
+    )
+    headers = dict(HTTP_HEADERS)
+    headers["Authorization"] = f"Bearer {record.sender_token}"
+
+    if record.benchmark_request_id:
+        headers["X-Myna-Benchmark-Run-Id"] = TEST_RUN_ID
+        headers["X-Myna-Benchmark-Request-Id"] = record.benchmark_request_id
+        headers["X-Myna-Benchmark-Phase"] = (
+            record.benchmark_phase or CURRENT_PHASE
+        )
+        headers["X-Myna-Benchmark-Concurrency"] = str(
+            record.benchmark_concurrency_header or ""
+        )
+
+    record.httpx_trace_event_at.clear()
+    record.httpx_trace_ms.clear()
+    record.httpx_trace_first_event_name = None
+    record.httpx_trace_used_new_tcp_connection = None
+    trace_handler = make_httpx_trace_handler(record)
+
+    released_at = await start_gate.arrive_and_wait()
+    start = time.perf_counter()
+    record.load_generator_dispatch_skew_ms = max(
+        0.0,
+        (start - released_at) * 1000,
+    )
+
+    try:
+        response = await client.post(
+            url,
+            json=record.payload,
+            headers=headers,
+            extensions={"trace": trace_handler},
+        )
+        finished = time.perf_counter()
+
+        record.client_request_ms = (finished - start) * 1000
+        record.latency_ms = record.client_request_ms
+        apply_httpx_hook_timings(
+            record,
+            request_started_at=start,
+            request_finished_at=finished,
+        )
+        apply_httpx_trace_timings(
+            record,
+            request_started_at=start,
+            request_finished_at=finished,
+        )
+        record.response_status = response.status_code
+        record.response_body = json_or_text(response)
+        record_api_call(
+            "POST",
+            url,
+            response.status_code,
+            record.latency_ms,
+            record.ok,
+        )
+    except Exception as exc:
+        finished = time.perf_counter()
+        record.client_request_ms = (finished - start) * 1000
+        record.latency_ms = record.client_request_ms
+        apply_httpx_hook_timings(
+            record,
+            request_started_at=start,
+            request_finished_at=finished,
+        )
+        apply_httpx_trace_timings(
+            record,
+            request_started_at=start,
+            request_finished_at=finished,
+        )
+        record.error = repr(exc)
+        record.error_type = exc.__class__.__name__
+        record_api_call(
+            "POST",
+            url,
+            None,
+            record.latency_ms,
+            False,
+            repr(exc),
+        )
+
+
+async def send_active_users_concurrently(
+    clients_by_pair_index: dict[int, httpx.AsyncClient],
+    *,
+    records: list[SentMessageRecord],
+    concurrency: int,
+) -> dict[str, Any]:
+    if len(records) != concurrency:
+        raise RuntimeError(
+            f"Active-user benchmark expected {concurrency} records, got {len(records)}"
+        )
+    pair_indexes = [record.pair_index for record in records]
+    if len(pair_indexes) != len(set(pair_indexes)):
+        raise RuntimeError(
+            "Active-user benchmark requires exactly one measured request per pair/user"
+        )
+    missing_clients = [
+        pair_index
+        for pair_index in pair_indexes
+        if pair_index not in clients_by_pair_index
+    ]
+    if missing_clients:
+        raise RuntimeError(
+            f"Missing dedicated HTTP clients for pair indexes: {missing_clients[:20]}"
+        )
+
+    start_gate = ActiveUserStartGate(len(records))
+    tasks = [
+        asyncio.create_task(
+            send_one_active_user_message(
+                clients_by_pair_index[record.pair_index],
+                record=record,
+                start_gate=start_gate,
+            )
+        )
+        for record in records
+    ]
+
+    released_at = await start_gate.release_when_ready()
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    finished_at = time.perf_counter()
+
+    dispatch_skews = [
+        float(record.load_generator_dispatch_skew_ms)
+        for record in records
+        if record.load_generator_dispatch_skew_ms is not None
+    ]
+    return {
+        "elapsed_ms": round((finished_at - released_at) * 1000, 2),
+        "dispatch_skew_ms": _latency_summary(dispatch_skews),
+        "participant_count": len(records),
+        "start_model": "coordinated_asyncio_event_barrier",
+    }
+
+
+async def warm_active_user_clients(
+    clients_by_pair_index: dict[int, httpx.AsyncClient],
+    *,
+    pairs: list[PairContext],
+    phase: str,
+) -> dict[str, Any]:
+    if not CONFIG["CONNECTION_WARMUP_ENABLED"]:
+        return {
+            "enabled": False,
+            "phase": phase,
+            "client_count": len(pairs),
+        }
+
+    url = api_url(CONFIG["MESSENGER_BASE_URL"], "/api/v1/health/")
+
+    async def warm_one(pair: PairContext) -> tuple[bool, float, str | None]:
+        client = clients_by_pair_index[pair.index]
+        started = time.perf_counter()
+        try:
+            response = await client.get(url)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            if not (200 <= response.status_code < 300):
+                return False, elapsed_ms, f"HTTP {response.status_code}"
+            return True, elapsed_ms, None
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            return False, elapsed_ms, repr(exc)
+
+    started = time.perf_counter()
+    results = await asyncio.gather(*(warm_one(pair) for pair in pairs))
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    failures = [
+        {"pair_index": pair.index, "error": result[2]}
+        for pair, result in zip(pairs, results)
+        if not result[0]
+    ]
+    latencies = [float(result[1]) for result in results]
+    summary = {
+        "enabled": True,
+        "phase": phase,
+        "purpose": "establish_or_refresh_one_hot_http_connection_per_selected_active_user",
+        "client_model": "one_persistent_async_client_per_pair",
+        "client_count": len(pairs),
+        "success_count": len(results) - len(failures),
+        "failure_count": len(failures),
+        "latency_ms": _latency_summary(latencies),
+        "total_elapsed_ms": round(elapsed_ms, 2),
+        "failed_samples": failures[:20],
+        "measured_in_benchmark_summary": False,
+    }
+    if failures:
+        raise RuntimeError(
+            f"Active-user connection warmup failed for {len(failures)} clients: "
+            f"{failures[:5]}"
+        )
+
+    settle_seconds = max(0.0, float(CONFIG["ACTIVE_CLIENT_SETTLE_SECONDS"]))
+    if settle_seconds:
+        await asyncio.sleep(settle_seconds)
+    summary["settle_seconds"] = settle_seconds
+    return summary
 
 
 def assign_benchmark_headers(records: list[SentMessageRecord], *, concurrency: int, phase: str) -> None:
@@ -2207,6 +2534,67 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
         for record in records
         if record.client_response_body_read_ms is not None
     ]
+    load_generator_dispatch_skews = [
+        record.load_generator_dispatch_skew_ms
+        for record in records
+        if record.load_generator_dispatch_skew_ms is not None
+    ]
+
+    httpx_trace_metric_names = (
+        "first_event_delay",
+        "connect_tcp",
+        "send_request_headers",
+        "send_request_body",
+        "receive_response_headers",
+        "wait_response_headers",
+        "receive_response_body",
+        "trace_total",
+    )
+    httpx_trace_summary = {
+        metric_name: _latency_summary(
+            [
+                float(record.httpx_trace_ms[metric_name])
+                for record in records
+                if metric_name in record.httpx_trace_ms
+            ]
+        )
+        for metric_name in httpx_trace_metric_names
+    }
+
+    new_tcp_connection_count = sum(
+        record.httpx_trace_used_new_tcp_connection is True
+        for record in records
+    )
+    reused_or_no_connect_event_count = sum(
+        record.httpx_trace_used_new_tcp_connection is False
+        for record in records
+    )
+    trace_unavailable_count = sum(
+        record.httpx_trace_used_new_tcp_connection is None
+        for record in records
+    )
+    usable_connection_trace_count = (
+        new_tcp_connection_count + reused_or_no_connect_event_count
+    )
+    no_connect_tcp_event_percent = (
+        round(
+            reused_or_no_connect_event_count
+            / usable_connection_trace_count
+            * 100,
+            2,
+        )
+        if usable_connection_trace_count
+        else None
+    )
+
+    first_event_counts: dict[str, int] = {}
+    for record in records:
+        event_name = record.httpx_trace_first_event_name
+        if event_name:
+            first_event_counts[event_name] = (
+                first_event_counts.get(event_name, 0) + 1
+            )
+
     statuses: dict[str, int] = {}
     for record in records:
         key = str(record.response_status or "exception")
@@ -2239,6 +2627,18 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
         "client_to_response_headers_ms": _latency_summary([float(v) for v in client_to_response_headers]),
         "client_transport_to_response_headers_ms": _latency_summary([float(v) for v in client_transport_to_response_headers]),
         "client_response_body_read_ms": _latency_summary([float(v) for v in client_response_body_reads]),
+        "load_generator_dispatch_skew_ms": _latency_summary([float(v) for v in load_generator_dispatch_skews]),
+        "httpx_trace_ms": httpx_trace_summary,
+        "httpx_trace_connection_counts": {
+            "new_tcp_connection": new_tcp_connection_count,
+            "no_connect_tcp_event": reused_or_no_connect_event_count,
+            "trace_unavailable": trace_unavailable_count,
+            "usable_trace_count": usable_connection_trace_count,
+            "no_connect_tcp_event_percent": no_connect_tcp_event_percent,
+        },
+        "httpx_trace_first_event_counts": dict(
+            sorted(first_event_counts.items())
+        ),
         "client_timing_semantics": {
             "benchmark_semaphore_wait_ms": (
                 "Time spent waiting for the benchmark coroutine semaphore "
@@ -2247,8 +2647,13 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
             "client_request_ms": (
                 "Time inside HTTPX AsyncClient.post. This may include "
                 "HTTPX pool wait, connect, write, server handling, response "
-                "headers, and response body read; this runner does not use "
-                "private httpcore trace internals."
+                "headers, and response body read."
+            ),
+            "httpx_trace_ms": (
+                "HTTPX documented trace-extension transport timings. "
+                "first_event_delay is request-start to the first observed "
+                "httpcore trace event. wait_response_headers is request-body "
+                "send completion to response-header receive completion."
             ),
             "client_to_response_headers_ms": (
                 "Time from immediately before AsyncClient.post() until the "
@@ -2259,6 +2664,11 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
             "client_response_body_read_ms": (
                 "Time from the documented HTTPX response hook until "
                 "AsyncClient.post() returns with the body read."
+            ),
+            "load_generator_dispatch_skew_ms": (
+                "Load-generator scheduling skew from coordinated gate release to "
+                "this simulated user's call into AsyncClient.post(). It is reported "
+                "separately and is not included in client_latency_ms."
             ),
         },
         "overall_client_request_time_ms": _timing_spent_summary(overall_client_request_times),
@@ -2320,6 +2730,13 @@ def summarize_records(records: list[SentMessageRecord], concurrency: Any | None 
                 "client_to_response_headers_ms": round(record.client_to_response_headers_ms, 2) if record.client_to_response_headers_ms is not None else None,
                 "client_transport_to_response_headers_ms": round(record.client_transport_to_response_headers_ms, 2) if record.client_transport_to_response_headers_ms is not None else None,
                 "client_response_body_read_ms": round(record.client_response_body_read_ms, 2) if record.client_response_body_read_ms is not None else None,
+                "httpx_trace_first_event_name": record.httpx_trace_first_event_name,
+                "httpx_trace_used_new_tcp_connection": record.httpx_trace_used_new_tcp_connection,
+                "load_generator_dispatch_skew_ms": round(record.load_generator_dispatch_skew_ms, 2) if record.load_generator_dispatch_skew_ms is not None else None,
+                "httpx_trace_ms": {
+                    key: round(value, 2)
+                    for key, value in sorted(record.httpx_trace_ms.items())
+                },
                 "status": record.response_status,
                 "ok": record.ok,
                 "primary_failure_category": primary_failure_category_for_record(record),
@@ -2506,6 +2923,144 @@ def analyze_benchmark_levels(level_summaries: list[dict[str, Any]]) -> dict[str,
         "first_avg_latency_2x_baseline_concurrency": first_avg_double.get("concurrency") if first_avg_double else None,
         "first_p95_latency_over_3000_ms_concurrency": first_p95_over_3000.get("concurrency") if first_p95_over_3000 else None,
     }
+
+
+def make_httpx_trace_handler(record: SentMessageRecord):
+    async def trace(
+        event_name: str,
+        info: dict[str, Any],
+    ) -> None:
+        del info
+        record.httpx_trace_event_at.setdefault(
+            event_name,
+            time.perf_counter(),
+        )
+
+    return trace
+
+
+def _httpx_trace_phase_ms(
+    events: dict[str, float],
+    *phase_names: str,
+) -> float | None:
+    for phase_name in phase_names:
+        started = events.get(f"{phase_name}.started")
+        complete = events.get(f"{phase_name}.complete")
+
+        if started is not None and complete is not None:
+            return max(
+                0.0,
+                (complete - started) * 1000,
+            )
+
+    return None
+
+
+def _httpx_trace_event_at(
+    events: dict[str, float],
+    *event_names: str,
+) -> float | None:
+    for event_name in event_names:
+        value = events.get(event_name)
+        if value is not None:
+            return value
+
+    return None
+
+
+def apply_httpx_trace_timings(
+    record: SentMessageRecord,
+    *,
+    request_started_at: float,
+    request_finished_at: float,
+) -> None:
+    events = record.httpx_trace_event_at
+
+    if not events:
+        return
+
+    first_event_name, first_event_at = min(
+        events.items(),
+        key=lambda item: item[1],
+    )
+    record.httpx_trace_first_event_name = first_event_name
+    record.httpx_trace_used_new_tcp_connection = any(
+        name.startswith("connection.connect_tcp.")
+        for name in events
+    )
+
+    record.httpx_trace_ms["first_event_delay"] = max(
+        0.0,
+        (first_event_at - request_started_at) * 1000,
+    )
+
+    phase_specs = {
+        "connect_tcp": (
+            "connection.connect_tcp",
+        ),
+        "send_request_headers": (
+            "http11.send_request_headers",
+            "http2.send_request_headers",
+        ),
+        "send_request_body": (
+            "http11.send_request_body",
+            "http2.send_request_body",
+        ),
+        "receive_response_headers": (
+            "http11.receive_response_headers",
+            "http11.receive_response",
+            "http2.receive_response_headers",
+        ),
+        "receive_response_body": (
+            "http11.receive_response_body",
+            "http2.receive_response_body",
+        ),
+    }
+
+    for metric_name, phase_names in phase_specs.items():
+        value = _httpx_trace_phase_ms(
+            events,
+            *phase_names,
+        )
+        if value is not None:
+            record.httpx_trace_ms[metric_name] = value
+
+    request_send_complete = _httpx_trace_event_at(
+        events,
+        "http11.send_request_body.complete",
+        "http2.send_request_body.complete",
+        "http11.send_request_headers.complete",
+        "http2.send_request_headers.complete",
+    )
+    response_headers_complete = _httpx_trace_event_at(
+        events,
+        "http11.receive_response_headers.complete",
+        "http11.receive_response.complete",
+        "http2.receive_response_headers.complete",
+    )
+
+    if (
+        request_send_complete is not None
+        and response_headers_complete is not None
+    ):
+        record.httpx_trace_ms["wait_response_headers"] = max(
+            0.0,
+            (
+                response_headers_complete
+                - request_send_complete
+            ) * 1000,
+        )
+
+    record.httpx_trace_ms["trace_total"] = max(
+        0.0,
+        (
+            min(
+                max(events.values()),
+                request_finished_at,
+            )
+            - first_event_at
+        ) * 1000,
+    )
 
 
 async def record_httpx_request_hook(request: httpx.Request) -> None:
@@ -3309,6 +3864,10 @@ async def run() -> int:
                 "MYNA_HTTP_POOL_TIMEOUT_SECONDS": CONFIG["HTTP_POOL_TIMEOUT_SECONDS"],
                 "MYNA_BENCHMARK_COOLDOWN_SECONDS": CONFIG["BENCHMARK_COOLDOWN_SECONDS"],
                 "MYNA_CONNECTION_WARMUP_CONCURRENCY": CONFIG["CONNECTION_WARMUP_CONCURRENCY"],
+                "MYNA_ACTIVE_CLIENT_SETTLE_SECONDS": CONFIG["ACTIVE_CLIENT_SETTLE_SECONDS"],
+                "ACTIVE_CLIENT_MODEL": "one_persistent_async_client_per_pair",
+                "ACTIVE_CLIENT_POOL_MAX_CONNECTIONS": 1,
+                "ACTIVE_CLIENT_POOL_MAX_KEEPALIVE_CONNECTIONS": 1,
             }
         },
         "runtime_environment": collect_runtime_environment_snapshot(),
@@ -3319,8 +3878,16 @@ async def run() -> int:
     docker_stats_sampler = DockerStatsSampler()
     report["httpx_client_lifecycle"] = {
         "setup_client": "preflight, pair setup, and room-creation warmup",
-        "connection_warmup_client": "optional unmeasured connection warmup only",
-        "measured_clients": "fresh AsyncClient per measured concurrency level",
+        "measured_clients": (
+            "one persistent AsyncClient per sender/pair; each client owns an "
+            "independent one-connection pool and is reused across levels"
+        ),
+        "connection_mode": "dedicated_persistent_client_per_active_user",
+        "measured_start_model": "coordinated_asyncio_event_barrier",
+        "per_level_connection_refresh": (
+            "unmeasured health request on each selected client immediately before "
+            "the measured send level"
+        ),
         "cleanup_client": "identity cleanup only",
     }
 
@@ -3380,75 +3947,134 @@ async def run() -> int:
                 if warmup_summary["failure_count"] > 0:
                     raise RuntimeError("Warmup failed; direct rooms were not created for all pairs.")
 
-            await add_mysql_telemetry(report, "before_connection_warmup")
-            async with make_benchmark_http_client() as connection_warmup_client:
-                sequence, connection_warmup_summary = await run_connection_warmup(
-                    connection_warmup_client,
-                    pairs=pairs,
-                    pairs_by_index=pairs_by_index,
-                    sequence_start=sequence,
-                    max_level=max(levels),
-                )
-            await add_mysql_telemetry(report, "after_connection_warmup")
-            report["connection_warmup"] = connection_warmup_summary
-            if connection_warmup_summary.get("failure_count", 0) > 0:
-                raise RuntimeError("Connection warmup failed; measured benchmark was not started.")
-
             per_level: list[dict[str, Any]] = []
             print_benchmark_level_table_header()
-            for level in levels:
-                selected_pairs = pairs[:level]
-                level_records = []
-                for pair in selected_pairs:
-                    sequence += 1
-                    level_records.append(build_send_payload_for_pair(
-                        pair=pair,
-                        sequence=sequence,
-                        benchmark_concurrency=level,
-                        force_contact_id=not bool(pair.room_id),
-                    ))
-                set_api_phase(f"send_concurrency_{level}", level)
-                assign_benchmark_headers(
-                    level_records,
-                    concurrency=level,
-                    phase=f"send_concurrency_{level}",
+
+            # Measured load model: one persistent HTTPX client per sender/pair.
+            # A shared AsyncClient owns one shared connection pool. Under high load,
+            # benchmark-side pool acquisition can dominate first_event_delay and make
+            # the load generator look like server latency. Dedicated clients model
+            # independent active users and eliminate that shared-pool queue.
+            async with AsyncExitStack() as measured_client_stack:
+                clients_by_pair_index: dict[int, httpx.AsyncClient] = {}
+                for pair in pairs:
+                    active_limits = httpx.Limits(
+                        max_connections=1,
+                        max_keepalive_connections=1,
+                        keepalive_expiry=float(CONFIG["HTTP_KEEPALIVE_EXPIRY_SECONDS"]),
+                    )
+                    active_timeout = httpx.Timeout(
+                        connect=10.0,
+                        read=float(CONFIG["REQUEST_TIMEOUT_SECONDS"]),
+                        write=10.0,
+                        pool=float(CONFIG["HTTP_POOL_TIMEOUT_SECONDS"]),
+                    )
+                    active_client = httpx.AsyncClient(
+                        timeout=active_timeout,
+                        limits=active_limits,
+                        follow_redirects=False,
+                        event_hooks={
+                            "request": [record_httpx_request_hook],
+                            "response": [record_httpx_response_hook],
+                        },
+                    )
+                    clients_by_pair_index[pair.index] = await measured_client_stack.enter_async_context(
+                        active_client
+                    )
+
+                initial_warmup_count = min(
+                    max(levels),
+                    max(1, int(CONFIG["CONNECTION_WARMUP_CONCURRENCY"] or max(levels))),
                 )
-                log_progress(f"Level concurrency={level}: sending {len(level_records)} messages from {len(selected_pairs)} different pairs...")
-                level_phase = f"concurrency_{level}"
-                await add_mysql_telemetry(report, f"before_concurrency_{level}")
-                send_started = time.perf_counter()
-                await docker_stats_sampler.start(level_phase)
-                elapsed_ms = 0.0
-                try:
-                    async with make_benchmark_http_client() as measured_client:
-                        await send_concurrently(measured_client, records=level_records, concurrency=level)
-                finally:
-                    elapsed_ms = (time.perf_counter() - send_started) * 1000
-                    await docker_stats_sampler.stop()
-                apply_room_ids_to_pairs(level_records, pairs_by_index)
-                level_summary = summarize_records(level_records, concurrency=level)
-                level_summary["total_send_elapsed_ms"] = round(elapsed_ms, 2)
-                add_throughput_metrics(level_summary, elapsed_ms=elapsed_ms)
-                level_summary["docker_stats"] = docker_stats_sampler.phase_summary(level_phase)
-                await add_mysql_telemetry(report, f"after_concurrency_{level}")
-                per_level.append(level_summary)
-                all_records.extend(level_records)
-                print_benchmark_level_table_row(level_summary)
-                log_progress(
-                    f"Level concurrency={level} done: success={level_summary['success_count']}, "
-                    f"failure={level_summary['failure_count']}, rooms={level_summary['unique_room_id_count']}, "
-                    f"avg_ms={level_summary['latency_ms'].get('avg')}, p95_ms={level_summary['latency_ms'].get('p95')}, "
-                    f"overall_req_total_ms={level_summary['overall_client_request_time_ms'].get('total')}, "
-                    f"main_django_total_ms={level_summary['main_django_logic_time_ms'].get('total')}, "
-                    f"main_django_avg_ms={level_summary['main_django_logic_time_ms'].get('avg')}, "
-                    f"main_django_p95_ms={level_summary['main_django_logic_time_ms'].get('p95')}, "
-                    f"msg_per_sec={level_summary.get('messages_per_second')}"
+                initial_warmup_pairs = pairs[:initial_warmup_count]
+                await add_mysql_telemetry(report, "before_connection_warmup")
+                initial_connection_warmup = await warm_active_user_clients(
+                    clients_by_pair_index,
+                    pairs=initial_warmup_pairs,
+                    phase="initial_active_user_connection_warmup",
                 )
-                if CONFIG["STOP_ON_FIRST_FAILED_LEVEL"] and level_summary.get("failure_count", 0) > 0:
-                    break
-                cooldown = float(CONFIG["BENCHMARK_COOLDOWN_SECONDS"])
-                if cooldown > 0 and level != levels[-1]:
-                    await asyncio.sleep(cooldown)
+                initial_connection_warmup["configured_initial_warmup_concurrency"] = int(
+                    CONFIG["CONNECTION_WARMUP_CONCURRENCY"]
+                )
+                initial_connection_warmup["per_level_refreshes_all_selected_clients"] = True
+                await add_mysql_telemetry(report, "after_connection_warmup")
+                report["connection_warmup"] = initial_connection_warmup
+
+                for level in levels:
+                    selected_pairs = pairs[:level]
+                    prelevel_warmup = await warm_active_user_clients(
+                        clients_by_pair_index,
+                        pairs=selected_pairs,
+                        phase=f"prelevel_active_user_connection_warmup_{level}",
+                    )
+
+                    level_records = []
+                    for pair in selected_pairs:
+                        sequence += 1
+                        level_records.append(build_send_payload_for_pair(
+                            pair=pair,
+                            sequence=sequence,
+                            benchmark_concurrency=level,
+                            force_contact_id=not bool(pair.room_id),
+                        ))
+                    set_api_phase(f"send_concurrency_{level}", level)
+                    assign_benchmark_headers(
+                        level_records,
+                        concurrency=level,
+                        phase=f"send_concurrency_{level}",
+                    )
+                    log_progress(
+                        f"Level concurrency={level}: releasing {len(level_records)} "
+                        "independent active-user clients together..."
+                    )
+                    level_phase = f"concurrency_{level}"
+                    await add_mysql_telemetry(report, f"before_concurrency_{level}")
+                    await docker_stats_sampler.start(level_phase)
+                    launch_summary: dict[str, Any] = {}
+                    try:
+                        launch_summary = await send_active_users_concurrently(
+                            clients_by_pair_index,
+                            records=level_records,
+                            concurrency=level,
+                        )
+                    finally:
+                        await docker_stats_sampler.stop()
+                    elapsed_ms = float(launch_summary.get("elapsed_ms") or 0.0)
+                    apply_room_ids_to_pairs(level_records, pairs_by_index)
+                    level_summary = summarize_records(level_records, concurrency=level)
+                    level_summary["httpx_connection_mode"] = "dedicated_persistent_client_per_active_user"
+                    level_summary["httpx_client_reused_across_levels"] = True
+                    level_summary["active_user_client_count"] = level
+                    level_summary["active_user_client_pool_max_connections"] = 1
+                    level_summary["active_user_client_pool_max_keepalive_connections"] = 1
+                    level_summary["load_generator_model"] = "one_async_client_per_pair_with_start_barrier"
+                    level_summary["load_generator_launch"] = launch_summary
+                    level_summary["prelevel_connection_warmup"] = prelevel_warmup
+                    level_summary["total_send_elapsed_ms"] = round(elapsed_ms, 2)
+                    add_throughput_metrics(level_summary, elapsed_ms=elapsed_ms)
+                    level_summary["docker_stats"] = docker_stats_sampler.phase_summary(level_phase)
+                    await add_mysql_telemetry(report, f"after_concurrency_{level}")
+                    per_level.append(level_summary)
+                    all_records.extend(level_records)
+                    print_benchmark_level_table_row(level_summary)
+                    connection_counts = level_summary.get("httpx_trace_connection_counts", {})
+                    dispatch_skew = level_summary.get("load_generator_dispatch_skew_ms", {})
+                    log_progress(
+                        f"Level concurrency={level} done: success={level_summary['success_count']}, "
+                        f"failure={level_summary['failure_count']}, rooms={level_summary['unique_room_id_count']}, "
+                        f"avg_ms={level_summary['latency_ms'].get('avg')}, p95_ms={level_summary['latency_ms'].get('p95')}, "
+                        f"dispatch_skew_p95_ms={dispatch_skew.get('p95')}, "
+                        f"first_event_delay_avg_ms={(level_summary.get('httpx_trace_ms', {}).get('first_event_delay', {}) or {}).get('avg')}, "
+                        f"new_tcp={connection_counts.get('new_tcp_connection')}, "
+                        f"no_connect_event={connection_counts.get('no_connect_tcp_event')}, "
+                        f"no_connect_pct={connection_counts.get('no_connect_tcp_event_percent')}, "
+                        f"msg_per_sec={level_summary.get('messages_per_second')}"
+                    )
+                    if CONFIG["STOP_ON_FIRST_FAILED_LEVEL"] and level_summary.get("failure_count", 0) > 0:
+                        break
+                    cooldown = float(CONFIG["BENCHMARK_COOLDOWN_SECONDS"])
+                    if cooldown > 0 and level != levels[-1]:
+                        await asyncio.sleep(cooldown)
 
             summary = summarize_records(all_records, concurrency="distributed_ladder")
             summary["benchmark_level_count"] = len(per_level)
@@ -3460,6 +4086,11 @@ async def run() -> int:
                 "levels_requested": levels,
                 "pair_count": pair_count,
                 "warmup_all_pairs": bool(CONFIG["WARMUP_ALL_PAIRS"]),
+                "connection_mode": "dedicated_persistent_client_per_active_user",
+                "persistent_httpx_client_reused_across_levels": True,
+                "active_user_client_model": "one_async_client_per_pair_with_one_connection_pool_slot",
+                "coordinated_start_barrier": True,
+                "per_level_connection_refresh": True,
                 "per_level": per_level,
                 "analysis": analyze_benchmark_levels(per_level),
             }

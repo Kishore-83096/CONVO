@@ -62,11 +62,18 @@ network_name="myna-local"
 mysql_container="mysql-benchmark-local"
 redis_container="redis"
 identity_container="identity-service-local"
-messenger_container="messenger-service-local"
+messenger_container_1="messenger-service-local-1"
+messenger_container_2="messenger-service-local-2"
+messenger_lb_container="messenger-load-balancer-local"
+# Keep messenger_container pointing at instance 1 for DB/outbox inspection helpers.
+messenger_container="$messenger_container_1"
 outbox_container="messenger-outbox-local"
 identity_image="identity-service-local:dev"
 messenger_image="messenger-service-local:dev"
 runner_image="messenger-benchmark-runner-local:dev"
+messenger_lb_image="${MYNA_MESSENGER_LB_IMAGE:-nginx:alpine}"
+messenger_lb_url="http://${messenger_lb_container}:8000"
+messenger_lb_host_port="${MYNA_MESSENGER_LB_HOST_PORT:-18000}"
 runner_container="myna-benchmark-runner"
 precheck_container="myna-benchmark-runner-precheck"
 gunicorn_log_container="/tmp/myna_benchmark_gunicorn_access.log"
@@ -81,9 +88,19 @@ run_artifact_dir="$resolved_report_dir/.${run_stamp}_accurate_timing_artifacts"
 mkdir -p "$run_artifact_dir"
 host_stats_csv="$run_artifact_dir/${run_stamp}_host_docker_stats.csv"
 gunicorn_log_host="$run_artifact_dir/${run_stamp}_myna_benchmark_gunicorn_access.log"
+gunicorn_log_host_1="$run_artifact_dir/${run_stamp}_myna_benchmark_gunicorn_access_instance_1.log"
+gunicorn_log_host_2="$run_artifact_dir/${run_stamp}_myna_benchmark_gunicorn_access_instance_2.log"
 gthread_queue_log_host="$run_artifact_dir/${run_stamp}_myna_gthread_queue.log"
+gthread_queue_log_host_1="$run_artifact_dir/${run_stamp}_myna_gthread_queue_instance_1.log"
+gthread_queue_log_host_2="$run_artifact_dir/${run_stamp}_myna_gthread_queue_instance_2.log"
 exception_log_host="$run_artifact_dir/${run_stamp}_myna_benchmark_asgi_exceptions.jsonl"
+exception_log_host_1="$run_artifact_dir/${run_stamp}_myna_benchmark_asgi_exceptions_instance_1.jsonl"
+exception_log_host_2="$run_artifact_dir/${run_stamp}_myna_benchmark_asgi_exceptions_instance_2.jsonl"
 messenger_docker_log_host="$run_artifact_dir/${run_stamp}_messenger_container.log"
+messenger_docker_log_host_1="$run_artifact_dir/${run_stamp}_messenger_instance_1_container.log"
+messenger_docker_log_host_2="$run_artifact_dir/${run_stamp}_messenger_instance_2_container.log"
+messenger_lb_docker_log_host="$run_artifact_dir/${run_stamp}_messenger_load_balancer_container.log"
+messenger_lb_config_host="$run_artifact_dir/${run_stamp}_messenger_load_balancer_nginx.conf"
 outbox_docker_log_host="$run_artifact_dir/${run_stamp}_messenger_outbox_container.log"
 outbox_status_host="$run_artifact_dir/${run_stamp}_realtime_outbox_status.json"
 runtime_config_host="$run_artifact_dir/${run_stamp}_service_runtime_config.json"
@@ -207,7 +224,7 @@ wait_realtime_outbox_drain() {
   done
 }
 
-info "Starting accurate-timing Docker-network benchmark"
+info "Starting two-Messenger load-balanced accurate-timing Docker-network benchmark"
 ensure_network "$network_name"
 container_running "$mysql_container" || die "MySQL benchmark container is not running: $mysql_container. Start it before running this accurate benchmark."
 wait_mysql_ready "$mysql_container" "$root_password"
@@ -218,7 +235,7 @@ if ! container_running "$redis_container"; then
   docker run -d --name "$redis_container" --network "$network_name" -p 6379:6379 redis:7-alpine >/dev/null
 fi
 
-for container in "$identity_container" "$messenger_container" "$outbox_container" "$runner_container" "$precheck_container"; do
+for container in "$identity_container" "$messenger_container_1" "$messenger_container_2" "$messenger_lb_container" "$outbox_container" "$runner_container" "$precheck_container"; do
   remove_container_if_exists "$container"
 done
 
@@ -230,19 +247,67 @@ docker build -t "$messenger_image" ./messenger
 info "Starting Identity"
 docker run -d --name "$identity_container" --network "$network_name" --env-file "$identity_env_file" -p 5000:5000 "$identity_image" >/dev/null
 
-info "Starting Messenger with benchmark-only Gunicorn access log"
-docker run -d --name "$messenger_container" --network "$network_name" --env-file "$messenger_env_file" \
-  "${docker_env_args[@]}" \
-  -e GUNICORN_ACCESS_LOG=0 \
-  -e "GUNICORN_ACCESS_LOG_FILE=$gunicorn_log_container" \
-  -e "GUNICORN_ACCESS_LOG_FORMAT=$gunicorn_access_log_format" \
-  -e MYNA_BENCHMARK_ASGI_ACCESS_LOG=1 \
-  -e "MYNA_BENCHMARK_ASGI_ACCESS_LOG_FILE=$gunicorn_log_container" \
-  -e "MYNA_BENCHMARK_ASGI_EXCEPTION_LOG_FILE=$exception_log_container" \
-  -p 8000:8000 "$messenger_image" >/dev/null
+start_messenger_instance() {
+  local container_name="$1"
+  info "Starting ${container_name} with benchmark queue instrumentation"
+  docker run -d --name "$container_name" --network "$network_name" --env-file "$messenger_env_file" \
+    "${docker_env_args[@]}" \
+    -e GUNICORN_ACCESS_LOG=0 \
+    -e "GUNICORN_ACCESS_LOG_FILE=$gunicorn_log_container" \
+    -e "GUNICORN_ACCESS_LOG_FORMAT=$gunicorn_access_log_format" \
+    -e MYNA_BENCHMARK_ASGI_ACCESS_LOG=1 \
+    -e "MYNA_BENCHMARK_ASGI_ACCESS_LOG_FILE=$gunicorn_log_container" \
+    -e "MYNA_BENCHMARK_ASGI_EXCEPTION_LOG_FILE=$exception_log_container" \
+    "$messenger_image" >/dev/null
+}
+
+start_messenger_instance "$messenger_container_1"
+start_messenger_instance "$messenger_container_2"
+
+cat > "$messenger_lb_config_host" <<EOF
+worker_processes 1;
+
+events {
+    worker_connections 4096;
+}
+
+http {
+    upstream messenger_backend {
+        server ${messenger_container_1}:8000 max_fails=3 fail_timeout=2s;
+        server ${messenger_container_2}:8000 max_fails=3 fail_timeout=2s;
+
+        keepalive 64;
+        keepalive_timeout 4s;
+    }
+
+    server {
+        listen 8000;
+        access_log off;
+
+        location / {
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            # Preserve the same Host value used by the previous direct-container test.
+            proxy_set_header Host messenger-service-local;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 60s;
+            proxy_pass http://messenger_backend;
+        }
+    }
+}
+EOF
+
+info "Starting local Nginx load balancer for two Messenger instances"
+docker run -d --name "$messenger_lb_container" --network "$network_name" \
+  -p "127.0.0.1:${messenger_lb_host_port}:8000" \
+  -v "${messenger_lb_config_host}:/etc/nginx/nginx.conf:ro" \
+  "$messenger_lb_image" >/dev/null
 
 wait_http_ok Identity http://127.0.0.1:5000/api/v1/health/
-wait_http_ok Messenger http://127.0.0.1:8000/api/v1/health/
+wait_http_ok "Messenger load balancer" "http://127.0.0.1:${messenger_lb_host_port}/api/v1/health/"
 
 if [[ "$outbox_worker_enabled" == "true" ]]; then
   info "Starting Messenger realtime outbox worker"
@@ -260,12 +325,12 @@ if [[ "$outbox_worker_enabled" == "true" ]]; then
   }
 fi
 
-python3 - "$runtime_config_host" "$identity_container" "$messenger_container" "$outbox_container" "$outbox_worker_enabled" <<'PY'
+python3 - "$runtime_config_host" "$identity_container" "$messenger_container_1" "$messenger_container_2" "$messenger_lb_container" "$outbox_container" "$outbox_worker_enabled" <<'PY'
 import json
 import subprocess
 import sys
 
-out, identity, messenger, outbox, outbox_enabled = sys.argv[1:6]
+out, identity, messenger_1, messenger_2, messenger_lb, outbox, outbox_enabled = sys.argv[1:8]
 keys = [
     "WEB_CONCURRENCY",
     "ASGI_THREADS",
@@ -299,7 +364,16 @@ def env_for(container):
 
 services = {
     "identity": {"container": identity, "env": env_for(identity)},
-    "messenger": {"container": messenger, "env": env_for(messenger)},
+    # Preserve the standard "messenger" report key using instance 1 so the
+    # existing README builder keeps reporting workers/threads/config.
+    "messenger": {"container": messenger_1, "env": env_for(messenger_1)},
+    "messenger_instance_2": {"container": messenger_2, "env": env_for(messenger_2)},
+    "messenger_load_balancer": {
+        "container": messenger_lb,
+        "env": {},
+        "upstreams": [messenger_1, messenger_2],
+        "method": "nginx default round-robin",
+    },
 }
 if outbox_enabled == "true":
     services["messenger_outbox"] = {"container": outbox, "env": env_for(outbox)}
@@ -318,15 +392,16 @@ host_user_args=(--user "$(id -u):$(id -g)" -e PYTHONDONTWRITEBYTECODE=1)
 
 docker run --rm --name "$precheck_container" --network "$network_name" --env-file "$env_path" \
   "${host_user_args[@]}" \
+  -e "MYNA_LOCAL_MESSENGER_BASE_URL=$messenger_lb_url" \
   -v "${benchmark_path}:/reports" "$runner_image" \
-  -c "import urllib.request; print(urllib.request.urlopen('http://identity-service-local:5000/api/v1/health/', timeout=10).read().decode()); print(urllib.request.urlopen('http://messenger-service-local:8000/api/v1/health/', timeout=10).read().decode())"
+  -c "import urllib.request; print(urllib.request.urlopen('http://identity-service-local:5000/api/v1/health/', timeout=10).read().decode()); print(urllib.request.urlopen('${messenger_lb_url}/api/v1/health/', timeout=10).read().decode())"
 
 printf 'timestamp,container,cpu_percent,mem_usage,mem_percent,net_io,block_io,pids\n' > "$host_stats_csv"
 (
   while true; do
     timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     containers_to_sample=()
-    for container in "$messenger_container" "$outbox_container" "$identity_container" "$mysql_container" "$redis_container"; do
+    for container in "$messenger_container_1" "$messenger_container_2" "$messenger_lb_container" "$outbox_container" "$identity_container" "$mysql_container" "$redis_container"; do
       container_running "$container" || continue
       containers_to_sample+=("$container")
     done
@@ -360,6 +435,7 @@ set +e
 docker run --rm --name "$runner_container" --network "$network_name" --env-file "$env_path" \
   "${host_user_args[@]}" \
   "${runner_docker_env_args[@]}" \
+  -e "MYNA_LOCAL_MESSENGER_BASE_URL=$messenger_lb_url" \
   -e MYNA_CLEANUP_MESSENGER_DJANGO=false \
   -e MYNA_MESSENGER_DOCKER_CONTAINER= \
   -e MYNA_WRITE_LEGACY_MARKDOWN=false \
@@ -395,21 +471,82 @@ fi
 queue_collector_drain_seconds="${MYNA_GTHREAD_QUEUE_COLLECTOR_DRAIN_SECONDS:-1}"
 sleep "$queue_collector_drain_seconds"
 
-docker cp "${messenger_container}:$gunicorn_log_container" "$gunicorn_log_host" >/dev/null 2>&1 || {
-  warn "Could not copy Gunicorn access log from Messenger container."
-  : > "$gunicorn_log_host"
+copy_container_log_file() {
+  local container_name="$1"
+  local container_path="$2"
+  local host_path="$3"
+  local description="$4"
+  docker cp "${container_name}:${container_path}" "$host_path" >/dev/null 2>&1 || {
+    warn "Could not copy ${description} from ${container_name}."
+    : > "$host_path"
+  }
 }
-docker cp "${messenger_container}:$gthread_queue_log_container" "$gthread_queue_log_host" >/dev/null 2>&1 || {
-  warn "Could not copy Gunicorn gthread queue log from Messenger container."
-  : > "$gthread_queue_log_host"
+
+copy_container_log_file "$messenger_container_1" "$gunicorn_log_container" "$gunicorn_log_host_1" "Gunicorn access log"
+copy_container_log_file "$messenger_container_2" "$gunicorn_log_container" "$gunicorn_log_host_2" "Gunicorn access log"
+cat "$gunicorn_log_host_1" "$gunicorn_log_host_2" > "$gunicorn_log_host"
+
+copy_container_log_file "$messenger_container_1" "$gthread_queue_log_container" "$gthread_queue_log_host_1" "Gunicorn gthread queue log"
+copy_container_log_file "$messenger_container_2" "$gthread_queue_log_container" "$gthread_queue_log_host_2" "Gunicorn gthread queue log"
+
+# Docker PID namespaces can reuse the same numeric Gunicorn PIDs. Prefix the
+# worker identity in each queue log before merging so the existing analyzer
+# counts all 12 workers instead of accidentally collapsing same-numbered PIDs.
+python3 - "$gthread_queue_log_host_1" "$gthread_queue_log_host_2" "$gthread_queue_log_host" <<'PY'
+import sys
+from pathlib import Path
+
+sources = [
+    ("messenger-1", Path(sys.argv[1])),
+    ("messenger-2", Path(sys.argv[2])),
+]
+output = Path(sys.argv[3])
+
+lines = []
+pid_fields = ("worker_pid=", "enqueue_worker_pid=", "handle_worker_pid=")
+for instance, source in sources:
+    if not source.exists():
+        continue
+    for raw in source.read_text(encoding="utf-8-sig").splitlines():
+        if not raw.strip():
+            continue
+        tokens = []
+        for token in raw.split():
+            for prefix in pid_fields:
+                if token.startswith(prefix):
+                    token = f"{prefix}{instance}:{token[len(prefix):]}"
+                    break
+            tokens.append(token)
+        lines.append(" ".join(tokens))
+
+output.write_text(
+    "".join(f"{line}\n" for line in lines),
+    encoding="utf-8",
+)
+PY
+
+copy_container_log_file "$messenger_container_1" "$exception_log_container" "$exception_log_host_1" "benchmark ASGI exception log"
+copy_container_log_file "$messenger_container_2" "$exception_log_container" "$exception_log_host_2" "benchmark ASGI exception log"
+cat "$exception_log_host_1" "$exception_log_host_2" > "$exception_log_host"
+
+docker logs "$messenger_container_1" > "$messenger_docker_log_host_1" 2>&1 || {
+  warn "Could not capture Messenger instance 1 Docker logs."
+  : > "$messenger_docker_log_host_1"
 }
-docker cp "${messenger_container}:$exception_log_container" "$exception_log_host" >/dev/null 2>&1 || {
-  warn "Could not copy benchmark ASGI exception log from Messenger container."
-  : > "$exception_log_host"
+docker logs "$messenger_container_2" > "$messenger_docker_log_host_2" 2>&1 || {
+  warn "Could not capture Messenger instance 2 Docker logs."
+  : > "$messenger_docker_log_host_2"
 }
-docker logs "$messenger_container" > "$messenger_docker_log_host" 2>&1 || {
-  warn "Could not capture Messenger Docker logs."
-  : > "$messenger_docker_log_host"
+{
+  printf '===== %s =====\n' "$messenger_container_1"
+  cat "$messenger_docker_log_host_1"
+  printf '\n===== %s =====\n' "$messenger_container_2"
+  cat "$messenger_docker_log_host_2"
+} > "$messenger_docker_log_host"
+
+docker logs "$messenger_lb_container" > "$messenger_lb_docker_log_host" 2>&1 || {
+  warn "Could not capture Messenger load balancer Docker logs."
+  : > "$messenger_lb_docker_log_host"
 }
 if [[ "$outbox_worker_enabled" == "true" ]]; then
   docker logs "$outbox_container" > "$outbox_docker_log_host" 2>&1 || {

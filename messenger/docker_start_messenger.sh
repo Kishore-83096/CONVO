@@ -21,7 +21,7 @@ access_logfile() {
         printf '%s' "$GUNICORN_ACCESS_LOGFILE"
         return
     fi
-    if [ "$(env_value GUNICORN_ACCESS_LOG 1)" = "1" ]; then
+    if [ "$(env_value GUNICORN_ACCESS_LOG 0)" = "1" ]; then
         printf '%s' "-"
     else
         printf '%s' "/dev/null"
@@ -37,14 +37,16 @@ case "$role" in
     http)
         http_mode="$(env_value MESSENGER_HTTP_SERVER_MODE wsgi)"
         if [ "$http_mode" = "wsgi" ]; then
-            echo "Starting Messenger HTTP WSGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 4), GUNICORN_THREADS=$(env_value GUNICORN_THREADS 8), GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
+            echo "Starting Messenger HTTP WSGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 6), GUNICORN_THREADS=$(env_value GUNICORN_THREADS 12), GUNICORN_WORKER_CONNECTIONS=$(env_value GUNICORN_WORKER_CONNECTIONS 512), GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
             set -- \
                 gunicorn messenger_config.wsgi:application \
-                --worker-class gthread \
-                --threads "$(env_value GUNICORN_THREADS 8)" \
+                --worker-class "$(env_value GUNICORN_WORKER_CLASS gthread)" \
+                --threads "$(env_value GUNICORN_THREADS 12)" \
+                --worker-connections "$(env_value GUNICORN_WORKER_CONNECTIONS 512)" \
                 --bind "0.0.0.0:${port}" \
-                --workers "$(env_value WEB_CONCURRENCY 4)" \
+                --workers "$(env_value WEB_CONCURRENCY 6)" \
                 --backlog "$(env_value GUNICORN_BACKLOG 4096)" \
+                --reuse-port \
                 --timeout "$(env_value GUNICORN_TIMEOUT 60)" \
                 --graceful-timeout "$(env_value GUNICORN_GRACEFUL_TIMEOUT 30)" \
                 --keep-alive "$(env_value GUNICORN_KEEP_ALIVE 5)" \
@@ -61,13 +63,16 @@ case "$role" in
             echo "Invalid MESSENGER_HTTP_SERVER_MODE: ${http_mode}. Expected one of: asgi, wsgi." >&2
             exit 2
         fi
-        echo "Starting Messenger HTTP ASGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 4), ASGI_THREADS=${ASGI_THREADS}, GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
+        echo "Starting Messenger HTTP ASGI role on 0.0.0.0:${port} with WEB_CONCURRENCY=$(env_value WEB_CONCURRENCY 6), ASGI_THREADS=${ASGI_THREADS}, GUNICORN_BACKLOG=$(env_value GUNICORN_BACKLOG 4096), DB_CONN_MAX_AGE=${DB_CONN_MAX_AGE:-role-default}, DB_CONN_HEALTH_CHECKS=$(env_value DB_CONN_HEALTH_CHECKS true)" >&2
         set -- \
             gunicorn messenger_config.asgi:application \
             -k uvicorn_worker.UvicornWorker \
             --bind "0.0.0.0:${port}" \
             --workers "$(env_value WEB_CONCURRENCY 6)" \
+            --threads "$(env_value GUNICORN_THREADS 12)" \
+            --worker-connections "$(env_value GUNICORN_WORKER_CONNECTIONS 512)" \
             --backlog "$(env_value GUNICORN_BACKLOG 4096)" \
+            --reuse-port \
             --timeout "$(env_value GUNICORN_TIMEOUT 60)" \
             --graceful-timeout "$(env_value GUNICORN_GRACEFUL_TIMEOUT 30)" \
             --keep-alive "$(env_value GUNICORN_KEEP_ALIVE 5)" \

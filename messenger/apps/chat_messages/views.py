@@ -206,6 +206,7 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
 
             with profile_database_queries(view_timings_ms):
                 phase_started_at = time.perf_counter()
+
                 with profile_database_stage("recipient_resolution"):
                     if room_id is not None:
                         existing_room, recipient_user_id = (
@@ -214,15 +215,23 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
                                 room_id=room_id,
                             )
                         )
+
                     else:
-                        resolved_recipient = resolve_saved_contact_recipient(
-                            contact_id=recipient_contact_id,
-                            authorization_header=authorization_header,
+                        resolved_recipient = (
+                            resolve_saved_contact_recipient(
+                                contact_id=recipient_contact_id,
+                                authorization_header=authorization_header,
+                            )
                         )
 
-                        recipient_user_id = resolved_recipient.contact_user_id
+                        recipient_user_id = (
+                            resolved_recipient.contact_user_id
+                        )
                         sender_contact_validated_by_identity = True
-                        identity_contact_id = resolved_recipient.contact_id
+                        identity_contact_id = (
+                            resolved_recipient.contact_id
+                        )
+
                 profile_checkpoint(
                     view_timings_ms,
                     "view_recipient_resolution",
@@ -230,6 +239,7 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
                 )
 
                 phase_started_at = time.perf_counter()
+
                 with profile_database_stage("service_call"):
                     result = send_direct_message_with_recovery(
                         sender_user_id=authenticated_user_id,
@@ -239,15 +249,26 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
                         ),
                         identity_contact_id=identity_contact_id,
                         existing_room=existing_room,
-                        require_saved_contact=existing_room is not None,
+                        require_saved_contact=(
+                            existing_room is not None
+                        ),
                         profile_timings_ms=view_timings_ms,
                         **validated_data,
                     )
-            profile_checkpoint(
-                view_timings_ms,
-                "view_service_call",
-                phase_started_at,
-            )
+
+                profile_checkpoint(
+                    view_timings_ms,
+                    "view_service_call",
+                    phase_started_at,
+                )
+
+            if (
+                result.profile_timings_ms is not None
+                and result.profile_timings_ms is not view_timings_ms
+            ):
+                result.profile_timings_ms.update(
+                    view_timings_ms or {}
+                )
             if (
                 result.profile_timings_ms is not None
                 and result.profile_timings_ms is not view_timings_ms

@@ -262,9 +262,390 @@ def target_summary_rows(report: dict[str, Any], concurrency: int | None) -> list
         ["largest_unattributed_region", largest_unattributed_name],
         ["largest_unattributed_avg_ms", largest_unattributed_ms],
         ["largest_unattributed_percent_of_client_avg", largest_unattributed_pct],
+        ["load_generator_dispatch_skew_avg_ms", metric(level, "load_generator_dispatch_skew_ms", "avg")],
+        ["load_generator_dispatch_skew_p95_ms", metric(level, "load_generator_dispatch_skew_ms", "p95")],
+        ["httpx_first_event_delay_avg_ms", metric((httpx_trace_source(report, concurrency).get("httpx_trace_ms") or {}), "first_event_delay", "avg")],
+        ["httpx_wait_response_headers_avg_ms", metric((httpx_trace_source(report, concurrency).get("httpx_trace_ms") or {}), "wait_response_headers", "avg")],
+        ["httpx_connect_tcp_avg_ms", metric((httpx_trace_source(report, concurrency).get("httpx_trace_ms") or {}), "connect_tcp", "avg")],
+        ["httpx_new_tcp_connection_count", (httpx_trace_source(report, concurrency).get("httpx_trace_connection_counts") or {}).get("new_tcp_connection")],
+        ["httpx_no_connect_tcp_event_count", (httpx_trace_source(report, concurrency).get("httpx_trace_connection_counts") or {}).get("no_connect_tcp_event")],
+        ["httpx_trace_unavailable_count", (httpx_trace_source(report, concurrency).get("httpx_trace_connection_counts") or {}).get("trace_unavailable")],
+        ["gthread_queue_wait_avg_ms", (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("avg")],
+        ["gthread_queue_wait_p95_ms", (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("p95")],
+        ["gthread_queue_wait_p99_ms", (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("p99")],
+        ["gthread_worker_count", (gthread_queue_source(report, concurrency).get("distribution_summary") or {}).get("worker_count")],
+        ["gthread_worker_request_spread", (gthread_queue_source(report, concurrency).get("distribution_summary") or {}).get("worker_request_spread")],
+        ["gthread_worker_request_cv_pct", (gthread_queue_source(report, concurrency).get("distribution_summary") or {}).get("worker_request_cv_pct")],
+        ["gthread_queue_vs_httpx_header_wait_pearson", (gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("pearson_queue_vs_httpx_wait_response_headers")],
+        ["gthread_queue_share_of_httpx_header_wait_avg_pct", (gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("queue_share_of_httpx_wait_response_headers_avg_pct")],
+        ["httpx_header_wait_minus_gthread_queue_avg_ms", (((gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("httpx_wait_response_headers_minus_queue_ms") or {}).get("avg"))],
         ["instrumentation_warning_count", (source or {}).get("instrumentation_warning_count")],
     ]
 
+
+HTTPX_TRACE_METRICS = (
+    ("first_event_delay", "request start -> first HTTPX/httpcore trace event"),
+    ("connect_tcp", "TCP connect"),
+    ("send_request_headers", "send request headers"),
+    ("send_request_body", "send request body"),
+    ("receive_response_headers", "receive response headers"),
+    ("wait_response_headers", "request send complete -> response headers complete"),
+    ("receive_response_body", "receive response body"),
+    ("trace_total", "first trace event -> final observed trace event"),
+)
+
+
+def httpx_trace_source(report: dict[str, Any], concurrency: int | None) -> dict[str, Any]:
+    level = find_level(report, concurrency) or {}
+    if (
+        level.get("httpx_trace_ms")
+        or level.get("httpx_trace_connection_counts")
+        or level.get("httpx_trace_first_event_counts")
+    ):
+        return level
+
+    summary = report.get("summary") or {}
+    if (
+        summary.get("httpx_trace_ms")
+        or summary.get("httpx_trace_connection_counts")
+        or summary.get("httpx_trace_first_event_counts")
+    ):
+        return summary
+
+    return {}
+
+
+def httpx_trace_timing_rows(report: dict[str, Any], concurrency: int | None) -> list[list[Any]]:
+    source = httpx_trace_source(report, concurrency)
+    timings = source.get("httpx_trace_ms") or {}
+    rows: list[list[Any]] = []
+
+    for metric_name, description in HTTPX_TRACE_METRICS:
+        value = timings.get(metric_name)
+        if not isinstance(value, dict) or not any(
+            value.get(field) is not None
+            for field in ("avg", "p50", "median", "p75", "p90", "p95", "p99", "max")
+        ):
+            continue
+
+        rows.append(
+            [
+                metric_name,
+                description,
+                value.get("avg"),
+                value.get("p50") or value.get("median"),
+                value.get("p75"),
+                value.get("p90"),
+                value.get("p95"),
+                value.get("p99"),
+                value.get("max"),
+            ]
+        )
+
+    return rows
+
+
+def httpx_trace_connection_rows(report: dict[str, Any], concurrency: int | None) -> list[list[Any]]:
+    source = httpx_trace_source(report, concurrency)
+    counts = source.get("httpx_trace_connection_counts") or {}
+    labels = (
+        ("new_tcp_connection", "requests with a connect_tcp trace event"),
+        ("no_connect_tcp_event", "requests without a connect_tcp trace event / connection reused or otherwise no connect event"),
+        ("trace_unavailable", "requests with no usable HTTPX trace data"),
+    )
+    return [
+        [name, counts.get(name), description]
+        for name, description in labels
+        if counts.get(name) is not None
+    ]
+
+
+def httpx_trace_first_event_rows(report: dict[str, Any], concurrency: int | None) -> list[list[Any]]:
+    source = httpx_trace_source(report, concurrency)
+    counts = source.get("httpx_trace_first_event_counts") or {}
+    return [
+        [event_name, count]
+        for event_name, count in sorted(
+            counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )
+    ]
+
+
+def append_httpx_trace_section(
+    lines: list[str],
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> None:
+    timing_rows = httpx_trace_timing_rows(report, concurrency)
+    connection_rows = httpx_trace_connection_rows(report, concurrency)
+    first_event_rows = httpx_trace_first_event_rows(report, concurrency)
+
+    if timing_rows:
+        lines.extend(
+            markdown_table(
+                [
+                    "metric",
+                    "meaning",
+                    "avg_ms",
+                    "p50_ms",
+                    "p75_ms",
+                    "p90_ms",
+                    "p95_ms",
+                    "p99_ms",
+                    "max_ms",
+                ],
+                timing_rows,
+            )
+        )
+    else:
+        lines.append(
+            "No HTTPX trace timing samples were present in the target-concurrency benchmark summary."
+        )
+
+    lines.extend(["", "**Connection Trace Counts**", ""])
+    if connection_rows:
+        lines.extend(
+            markdown_table(
+                ["connection_trace", "count", "meaning"],
+                connection_rows,
+            )
+        )
+    else:
+        lines.append("No HTTPX connection trace counts were present.")
+
+    lines.extend(["", "**First HTTPX / httpcore Trace Events**", ""])
+    if first_event_rows:
+        lines.extend(
+            markdown_table(
+                ["first_event_name", "count"],
+                first_event_rows,
+            )
+        )
+    else:
+        lines.append("No first-event trace counts were present.")
+
+    lines.extend(
+        [
+            "",
+            "`first_event_delay` measures request-start to the first observed HTTPX/httpcore trace event. "
+            "`wait_response_headers` measures request-send completion to response-header receive completion. "
+            "A missing `connect_tcp` event does not by itself prove keep-alive reuse; it means no TCP-connect trace event was observed for that request.",
+        ]
+    )
+
+
+
+def gthread_queue_source(
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> dict[str, Any]:
+    analysis = report.get("gunicorn_gthread_queue_analysis") or {}
+    for row in analysis.get("per_level") or []:
+        try:
+            row_concurrency = int(row.get("concurrency"))
+        except (TypeError, ValueError):
+            continue
+        if concurrency is not None and row_concurrency == int(concurrency):
+            return row
+    return {}
+
+
+def gthread_queue_summary_rows(
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> list[list[Any]]:
+    source = gthread_queue_source(report, concurrency)
+    queue = source.get("queue_wait_ms") or {}
+    distribution = source.get("distribution_summary") or {}
+    correlation = source.get("request_correlation") or {}
+    delta = (
+        correlation.get("httpx_wait_response_headers_minus_queue_ms")
+        or {}
+    )
+    rows = [
+        ["sample_count", source.get("sample_count")],
+        ["queue_wait_avg_ms", queue.get("avg")],
+        ["queue_wait_p50_ms", queue.get("p50") or queue.get("median")],
+        ["queue_wait_p75_ms", queue.get("p75")],
+        ["queue_wait_p90_ms", queue.get("p90")],
+        ["queue_wait_p95_ms", queue.get("p95")],
+        ["queue_wait_p99_ms", queue.get("p99")],
+        ["queue_wait_max_ms", queue.get("max")],
+        ["worker_count", distribution.get("worker_count")],
+        ["thread_count", distribution.get("thread_count")],
+        ["worker_requests_min", distribution.get("worker_requests_min")],
+        ["worker_requests_max", distribution.get("worker_requests_max")],
+        ["worker_request_spread", distribution.get("worker_request_spread")],
+        ["worker_requests_mean", distribution.get("worker_requests_mean")],
+        ["worker_requests_stdev", distribution.get("worker_requests_stdev")],
+        ["worker_request_cv_pct", distribution.get("worker_request_cv_pct")],
+        ["worker_max_to_min_request_ratio", distribution.get("worker_max_to_min_request_ratio")],
+        ["queue_httpx_matched_requests", correlation.get("matched_request_count")],
+        [
+            "queue_vs_httpx_wait_response_headers_pearson",
+            correlation.get("pearson_queue_vs_httpx_wait_response_headers"),
+        ],
+        [
+            "queue_share_of_httpx_wait_response_headers_avg_pct",
+            correlation.get("queue_share_of_httpx_wait_response_headers_avg_pct"),
+        ],
+        [
+            "httpx_wait_response_headers_minus_queue_avg_ms",
+            delta.get("avg"),
+        ],
+        [
+            "httpx_wait_response_headers_minus_queue_p50_ms",
+            delta.get("p50") or delta.get("median"),
+        ],
+        [
+            "httpx_wait_response_headers_minus_queue_p95_ms",
+            delta.get("p95"),
+        ],
+        [
+            "httpx_wait_response_headers_minus_queue_p99_ms",
+            delta.get("p99"),
+        ],
+        [
+            "httpx_wait_response_headers_minus_queue_max_ms",
+            delta.get("max"),
+        ],
+    ]
+    return [row for row in rows if row[1] is not None]
+
+
+def gthread_worker_distribution_rows(
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> list[list[Any]]:
+    source = gthread_queue_source(report, concurrency)
+    rows = []
+    for worker in source.get("worker_distribution") or []:
+        queue = worker.get("queue_wait_ms") or {}
+        rows.append(
+            [
+                worker.get("worker_pid"),
+                worker.get("request_count"),
+                worker.get("request_share_pct"),
+                queue.get("avg"),
+                queue.get("p50") or queue.get("median"),
+                queue.get("p95"),
+                queue.get("p99"),
+                queue.get("max"),
+            ]
+        )
+    return rows
+
+
+def gthread_thread_distribution_rows(
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> list[list[Any]]:
+    source = gthread_queue_source(report, concurrency)
+    rows = []
+    for thread in source.get("thread_distribution") or []:
+        queue = thread.get("queue_wait_ms") or {}
+        rows.append(
+            [
+                thread.get("worker_pid"),
+                thread.get("thread_ident"),
+                thread.get("thread_name"),
+                thread.get("request_count"),
+                thread.get("request_share_pct"),
+                queue.get("avg"),
+                queue.get("p95"),
+                queue.get("max"),
+            ]
+        )
+    return rows
+
+
+def append_gthread_queue_section(
+    lines: list[str],
+    report: dict[str, Any],
+    concurrency: int | None,
+) -> None:
+    analysis = report.get("gunicorn_gthread_queue_analysis") or {}
+    source = gthread_queue_source(report, concurrency)
+    summary_rows = gthread_queue_summary_rows(report, concurrency)
+    worker_rows = gthread_worker_distribution_rows(report, concurrency)
+    thread_rows = gthread_thread_distribution_rows(report, concurrency)
+
+    if not source:
+        lines.append(
+            "No Gunicorn gthread queue analysis was present for the "
+            "target concurrency."
+        )
+        warnings = analysis.get("warnings") or []
+        if warnings:
+            lines.extend(["", "**Queue Collector Warnings**", ""])
+            lines.extend(f"- {warning}" for warning in warnings)
+        return
+
+    lines.extend(
+        markdown_table(
+            ["metric", "value"],
+            summary_rows,
+        )
+    )
+
+    lines.extend(["", "**Worker PID Distribution**", ""])
+    if worker_rows:
+        lines.extend(
+            markdown_table(
+                [
+                    "worker_pid",
+                    "requests",
+                    "request_share_pct",
+                    "queue_avg_ms",
+                    "queue_p50_ms",
+                    "queue_p95_ms",
+                    "queue_p99_ms",
+                    "queue_max_ms",
+                ],
+                worker_rows,
+            )
+        )
+    else:
+        lines.append("No worker PID distribution samples were available.")
+
+    lines.extend(["", "**Thread Distribution**", ""])
+    if thread_rows:
+        lines.extend(
+            markdown_table(
+                [
+                    "worker_pid",
+                    "thread_ident",
+                    "thread_name",
+                    "requests",
+                    "request_share_pct",
+                    "queue_avg_ms",
+                    "queue_p95_ms",
+                    "queue_max_ms",
+                ],
+                thread_rows,
+            )
+        )
+    else:
+        lines.append("No thread distribution samples were available.")
+
+    warnings = source.get("warnings") or []
+    if warnings:
+        lines.extend(["", "**Queue Analysis Warnings**", ""])
+        lines.extend(f"- {warning}" for warning in warnings)
+
+    lines.extend(
+        [
+            "",
+            "`queue_wait_ms` measures Gunicorn gthread thread-pool queue time "
+            "from `enqueue_req()` submission to `handle()` thread start. "
+            "It does not include kernel backlog/pre-accept time.",
+            "",
+            "The queue/HTTPX Pearson correlation and HTTPX-minus-queue delta "
+            "are joined per request by `benchmark_request_id`; the queue-share "
+            "percentage compares population averages.",
+        ]
+    )
 
 def latency_decomposition_rows(row: dict[str, Any] | None) -> list[list[Any]]:
     if not row:
@@ -960,6 +1341,22 @@ def accurate_timing_table_rows(report: dict[str, Any]) -> list[list[Any]]:
                 metric(source, "db_query_other_count", "avg"),
                 metric(source, "service_realtime_outbox_persist_ms", "avg") or metric(source, "durable_outbox_persist_ms", "avg") or metric(source, "realtime_enqueue_ms", "avg"),
                 metric(source, "client_outside_server_ms", "avg") or metric(source, "client_or_network_gap_ms", "avg"),
+                metric(level, "load_generator_dispatch_skew_ms", "avg"),
+                metric(level, "load_generator_dispatch_skew_ms", "p95"),
+                metric((level.get("httpx_trace_ms") or {}), "first_event_delay", "avg"),
+                metric((level.get("httpx_trace_ms") or {}), "connect_tcp", "avg"),
+                metric((level.get("httpx_trace_ms") or {}), "wait_response_headers", "avg"),
+                (level.get("httpx_trace_connection_counts") or {}).get("new_tcp_connection"),
+                (level.get("httpx_trace_connection_counts") or {}).get("no_connect_tcp_event"),
+                (level.get("httpx_trace_connection_counts") or {}).get("trace_unavailable"),
+                (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("avg"),
+                (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("p95"),
+                (gthread_queue_source(report, concurrency).get("queue_wait_ms") or {}).get("p99"),
+                (gthread_queue_source(report, concurrency).get("distribution_summary") or {}).get("worker_count"),
+                (gthread_queue_source(report, concurrency).get("distribution_summary") or {}).get("worker_request_spread"),
+                (gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("pearson_queue_vs_httpx_wait_response_headers"),
+                (gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("queue_share_of_httpx_wait_response_headers_avg_pct"),
+                (((gthread_queue_source(report, concurrency).get("request_correlation") or {}).get("httpx_wait_response_headers_minus_queue_ms") or {}).get("avg")),
                 metric(source, "view_unattributed_ms", "avg"),
                 metric(source, "service_unattributed_ms", "avg"),
                 largest_unattributed_region(source)[2],
@@ -1015,6 +1412,22 @@ def accurate_timing_headers() -> list[str]:
         "db_other_count_avg",
         "outbox_enqueue_avg_ms",
         "client_outside_server_avg_ms",
+        "loadgen_dispatch_skew_avg_ms",
+        "loadgen_dispatch_skew_p95_ms",
+        "httpx_first_event_delay_avg_ms",
+        "httpx_connect_tcp_avg_ms",
+        "httpx_wait_response_headers_avg_ms",
+        "httpx_new_tcp_connection_count",
+        "httpx_no_connect_tcp_event_count",
+        "httpx_trace_unavailable_count",
+        "gthread_queue_avg_ms",
+        "gthread_queue_p95_ms",
+        "gthread_queue_p99_ms",
+        "gthread_worker_count",
+        "gthread_worker_request_spread",
+        "gthread_queue_vs_httpx_header_wait_pearson",
+        "gthread_queue_share_of_httpx_header_wait_avg_pct",
+        "httpx_header_wait_minus_gthread_queue_avg_ms",
         "view_unattributed_avg_ms",
         "service_unattributed_avg_ms",
         "largest_unattributed_pct",
@@ -1238,7 +1651,22 @@ def write_accurate_readme(
     else:
         lines.append("No matched target-concurrency post-view boundary samples were available.")
 
-    lines.extend(["", "## 10. Latency Decomposition", ""])
+    lines.extend(["", "## 10. HTTPX Transport Trace", ""])
+    dispatch_skew = metric(find_level(report, target) or {}, "load_generator_dispatch_skew_ms", "avg")
+    dispatch_skew_p95 = metric(find_level(report, target) or {}, "load_generator_dispatch_skew_ms", "p95")
+    if dispatch_skew is not None:
+        lines.append(
+            "Load-generator dispatch skew is reported separately from client latency: "
+            f"avg `{fmt(dispatch_skew)} ms`, p95 `{fmt(dispatch_skew_p95)} ms`. "
+            "This is benchmark-side scheduling after the coordinated start gate and is not Messenger server time."
+        )
+        lines.append("")
+    append_httpx_trace_section(lines, report, target)
+
+    lines.extend(["", "## 11. Gunicorn Gthread Queue And Worker Distribution", ""])
+    append_gthread_queue_section(lines, report, target)
+
+    lines.extend(["", "## 12. Latency Decomposition", ""])
     decomposition = latency_decomposition_rows(target_gap)
     if decomposition:
         lines.extend(
@@ -1259,10 +1687,10 @@ def write_accurate_readme(
     else:
         lines.append("No matched target-concurrency timing rows were available for decomposition.")
 
-    lines.extend(["", "## 11. Database Observations", ""])
+    lines.extend(["", "## 13. Database Observations", ""])
     append_database_observation_tables(lines, target_gap)
 
-    lines.extend(["", "## 12. Concurrent Run Timing Table", ""])
+    lines.extend(["", "## 14. Concurrent Run Timing Table", ""])
     lines.extend(markdown_table(accurate_timing_headers(), accurate_timing_table_rows(report)))
 
     lines.extend(["", *metric_definitions_section()])

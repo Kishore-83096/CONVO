@@ -60,6 +60,18 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
         notes="Mostly response body read and client-side finalization for the high-level HTTPX request.",
     ),
     MetricDefinition(
+        name="load_generator_dispatch_skew_ms",
+        label="Load generator dispatch skew",
+        unit="ms",
+        metric_type="observation",
+        start_boundary="Coordinated active-user start gate release.",
+        end_boundary="Simulated user's coroutine records request start immediately before AsyncClient.post().",
+        parent="benchmark_level",
+        included_in_http_latency=False,
+        benchmark_only=True,
+        notes="Benchmark-side scheduling diagnostic. It is intentionally excluded from client_latency_ms and must not be blamed on Messenger.",
+    ),
+    MetricDefinition(
         name="client_outside_server_ms",
         label="Client outside server",
         unit="ms",

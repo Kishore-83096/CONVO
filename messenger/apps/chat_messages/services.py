@@ -174,6 +174,7 @@ _ACTIVE_DB_PROFILE: ContextVar[
 )
 
 
+
 class DirectSendDatabaseProfile:
     def __init__(self, timings: dict[str, float] | None) -> None:
         self.timings = timings
@@ -186,7 +187,10 @@ class DirectSendDatabaseProfile:
             "delete": 0,
             "other": 0,
         }
-        self.operation_counts_by_stage: dict[str, dict[str, int]] = {}
+        self.operation_counts_by_stage: dict[
+            str,
+            dict[str, int],
+        ] = {}
         self.current_stage = "unattributed"
         self.started_with_connection = False
         self._context = None
@@ -195,93 +199,199 @@ class DirectSendDatabaseProfile:
     def __enter__(self):
         if self.timings is None:
             return self
-        self.started_with_connection = connection.connection is not None
-        self.timings["db_connection_was_present_before_ensure"] = (
+
+        self.started_with_connection = (
+            connection.connection is not None
+        )
+
+        self.timings[
+            "db_connection_was_present_before_ensure"
+        ] = (
             1.0
             if self.started_with_connection
             else 0.0
         )
+
         ensure_started_ns = time.perf_counter_ns()
+
         connection.ensure_connection()
+
         self.timings["db_connection_ensure_ms"] = round(
-            (time.perf_counter_ns() - ensure_started_ns) / 1_000_000,
+            (
+                time.perf_counter_ns()
+                - ensure_started_ns
+            )
+            / 1_000_000,
             2,
         )
-        self._context = connection.execute_wrapper(self._execute_wrapper)
+
+        self._context = connection.execute_wrapper(
+            self._execute_wrapper
+        )
+
         self._context.__enter__()
+
         self._profile_token = _ACTIVE_DB_PROFILE.set(self)
+
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
+        finalize_started_ns = time.perf_counter_ns()
+
         if self._profile_token is not None:
             _ACTIVE_DB_PROFILE.reset(self._profile_token)
+
         if self._context is not None:
-            self._context.__exit__(exc_type, exc, traceback)
+            self._context.__exit__(
+                exc_type,
+                exc,
+                traceback,
+            )
+
         if self.timings is None:
             return None
 
         query_count = len(self.query_durations_ms)
-        total_ms = round(sum(self.query_durations_ms), 2)
-        self.timings["db_query_count"] = float(query_count)
+        total_ms = round(
+            sum(self.query_durations_ms),
+            2,
+        )
+
+        self.timings["db_query_count"] = float(
+            query_count
+        )
+
         self.timings["db_query_total_ms"] = total_ms
+
         self.timings["db_query_avg_ms"] = (
-            round(total_ms / query_count, 2)
+            round(
+                total_ms / query_count,
+                2,
+            )
             if query_count
             else 0.0
         )
-        self.timings["db_query_p50_ms"] = _profile_percentile(
-            self.query_durations_ms,
-            0.50,
+
+        self.timings["db_query_p50_ms"] = (
+            _profile_percentile(
+                self.query_durations_ms,
+                0.50,
+            )
         )
-        self.timings["db_query_p95_ms"] = _profile_percentile(
-            self.query_durations_ms,
-            0.95,
+
+        self.timings["db_query_p95_ms"] = (
+            _profile_percentile(
+                self.query_durations_ms,
+                0.95,
+            )
         )
-        self.timings["db_query_p99_ms"] = _profile_percentile(
-            self.query_durations_ms,
-            0.99,
+
+        self.timings["db_query_p99_ms"] = (
+            _profile_percentile(
+                self.query_durations_ms,
+                0.99,
+            )
         )
+
         self.timings["db_query_max_ms"] = (
-            round(max(self.query_durations_ms), 2)
+            round(
+                max(self.query_durations_ms),
+                2,
+            )
             if self.query_durations_ms
             else 0.0
         )
+
         for operation, count in self.operation_counts.items():
-            self.timings[f"db_query_{operation}_count"] = float(count)
-        for stage, durations in sorted(self.query_durations_by_stage_ms.items()):
+            self.timings[
+                f"db_query_{operation}_count"
+            ] = float(count)
+
+        for stage, durations in sorted(
+            self.query_durations_by_stage_ms.items()
+        ):
             stage_query_count = len(durations)
-            stage_total_ms = round(sum(durations), 2)
-            self.timings[f"{stage}_db_query_count"] = float(stage_query_count)
-            self.timings[f"{stage}_db_query_total_ms"] = stage_total_ms
-            self.timings[f"{stage}_db_query_avg_ms"] = (
-                round(stage_total_ms / stage_query_count, 2)
+
+            stage_total_ms = round(
+                sum(durations),
+                2,
+            )
+
+            self.timings[
+                f"{stage}_db_query_count"
+            ] = float(stage_query_count)
+
+            self.timings[
+                f"{stage}_db_query_total_ms"
+            ] = stage_total_ms
+
+            self.timings[
+                f"{stage}_db_query_avg_ms"
+            ] = (
+                round(
+                    stage_total_ms / stage_query_count,
+                    2,
+                )
                 if stage_query_count
                 else 0.0
             )
-            self.timings[f"{stage}_db_query_p95_ms"] = _profile_percentile(
+
+            self.timings[
+                f"{stage}_db_query_p95_ms"
+            ] = _profile_percentile(
                 durations,
                 0.95,
             )
-            self.timings[f"{stage}_db_query_p99_ms"] = _profile_percentile(
+
+            self.timings[
+                f"{stage}_db_query_p99_ms"
+            ] = _profile_percentile(
                 durations,
                 0.99,
             )
-            operation_counts = self.operation_counts_by_stage.get(stage, {})
-            for operation in ("select", "insert", "update", "delete", "other"):
-                self.timings[f"{stage}_db_query_{operation}_count"] = float(
-                    operation_counts.get(operation, 0)
+
+            operation_counts = (
+                self.operation_counts_by_stage.get(
+                    stage,
+                    {},
                 )
-        self.timings["db_connection_open_at_profile_start"] = (
+            )
+
+            for operation in (
+                "select",
+                "insert",
+                "update",
+                "delete",
+                "other",
+            ):
+                self.timings[
+                    f"{stage}_db_query_{operation}_count"
+                ] = float(
+                    operation_counts.get(
+                        operation,
+                        0,
+                    )
+                )
+
+        self.timings[
+            "db_connection_open_at_profile_start"
+        ] = (
             1.0
             if self.started_with_connection
             else 0.0
         )
-        self.timings["db_connection_open_at_profile_finish"] = (
+
+        self.timings[
+            "db_connection_open_at_profile_finish"
+        ] = (
             1.0
             if connection.connection is not None
             else 0.0
         )
-        self.timings["db_connection_observed_new"] = (
+
+        self.timings[
+            "db_connection_observed_new"
+        ] = (
             1.0
             if (
                 not self.started_with_connection
@@ -290,42 +400,111 @@ class DirectSendDatabaseProfile:
             )
             else 0.0
         )
+
+        self.timings["db_profile_finalize_ms"] = round(
+            (
+                time.perf_counter_ns()
+                - finalize_started_ns
+            )
+            / 1_000_000,
+            2,
+        )
+
         return None
 
-    def _execute_wrapper(self, execute, sql, params, many, context):
+    def _execute_wrapper(
+        self,
+        execute,
+        sql,
+        params,
+        many,
+        context,
+    ):
         started_at = time.perf_counter()
+
         try:
-            return execute(sql, params, many, context)
-        finally:
-            duration_ms = (time.perf_counter() - started_at) * 1000
-            self.query_durations_ms.append(duration_ms)
-            operation = self._operation_for_sql(sql)
-            self.operation_counts[operation] = (
-                self.operation_counts.get(operation, 0) + 1
+            return execute(
+                sql,
+                params,
+                many,
+                context,
             )
-            stage = str(self.current_stage or "unattributed")
-            self.query_durations_by_stage_ms.setdefault(stage, []).append(
+
+        finally:
+            duration_ms = (
+                time.perf_counter()
+                - started_at
+            ) * 1000
+
+            self.query_durations_ms.append(
                 duration_ms
             )
-            stage_operations = self.operation_counts_by_stage.setdefault(
-                stage,
-                {
-                    "select": 0,
-                    "insert": 0,
-                    "update": 0,
-                    "delete": 0,
-                    "other": 0,
-                },
+
+            operation = self._operation_for_sql(sql)
+
+            self.operation_counts[operation] = (
+                self.operation_counts.get(
+                    operation,
+                    0,
+                )
+                + 1
             )
-            stage_operations[operation] = stage_operations.get(operation, 0) + 1
+
+            stage = str(
+                self.current_stage
+                or "unattributed"
+            )
+
+            self.query_durations_by_stage_ms.setdefault(
+                stage,
+                [],
+            ).append(duration_ms)
+
+            stage_operations = (
+                self.operation_counts_by_stage.setdefault(
+                    stage,
+                    {
+                        "select": 0,
+                        "insert": 0,
+                        "update": 0,
+                        "delete": 0,
+                        "other": 0,
+                    },
+                )
+            )
+
+            stage_operations[operation] = (
+                stage_operations.get(
+                    operation,
+                    0,
+                )
+                + 1
+            )
 
     @staticmethod
     def _operation_for_sql(sql: Any) -> str:
-        first_token = str(sql or "").lstrip().split(maxsplit=1)
-        operation = first_token[0].lower() if first_token else ""
-        if operation in {"select", "insert", "update", "delete"}:
+        first_token = (
+            str(sql or "")
+            .lstrip()
+            .split(maxsplit=1)
+        )
+
+        operation = (
+            first_token[0].lower()
+            if first_token
+            else ""
+        )
+
+        if operation in {
+            "select",
+            "insert",
+            "update",
+            "delete",
+        }:
             return operation
+
         return "other"
+
 
 
 def profile_database_queries(timings: dict[str, float] | None):
@@ -1202,6 +1381,7 @@ def send_direct_message(
     delivery_policy_snapshot: DeliveryPolicySnapshot | None = None,
     require_saved_contact: bool = False,
     profile_timings_ms: dict[str, float] | None = None,
+    defer_idempotency_retry_to_outer_transaction: bool = False,
 ) -> DirectMessageResult:
     total_started_at = time.perf_counter()
     phase_started_at = time.perf_counter()
@@ -1446,45 +1626,56 @@ def send_direct_message(
             client_sent_at=client_sent_at,
         )
 
-        try:
-            with transaction.atomic():
-                phase_started_at = time.perf_counter()
-                message.save(force_insert=True)
-                profile_checkpoint(
-                    profile_timings_ms,
-                    "service_message_insert",
-                    phase_started_at,
-                )
-        except IntegrityError:
+        def insert_message() -> None:
+            phase_started_at = time.perf_counter()
+
+            message.save(force_insert=True)
+
             profile_checkpoint(
                 profile_timings_ms,
-                "service_total",
-                total_started_at,
+                "service_message_insert",
+                phase_started_at,
             )
-            return _return_existing_idempotent_direct_message(
-                sender_id=sender_id,
-                recipient_id=recipient_id,
-                pair_key=pair_key,
-                normalized_client_message_id=(
-                    normalized_client_message_id
-                ),
-                normalized_sender_device_id=(
-                    normalized_sender_device_id
-                ),
-                normalized_message_type=normalized_message_type,
-                normalized_encrypted_payload=(
-                    normalized_encrypted_payload
-                ),
-                encryption_metadata=encryption_metadata,
-                normalized_encryption_version=(
-                    normalized_encryption_version
-                ),
-                normalized_reply_to_id=normalized_reply_to_id,
-                client_sent_at=client_sent_at,
-                normalized_envelopes=normalized_envelopes,
-                attachment_ids=attachment_ids,
-                profile_timings_ms=profile_timings_ms,
-            )
+
+        if defer_idempotency_retry_to_outer_transaction:
+            insert_message()
+
+        else:
+            try:
+                with transaction.atomic():
+                    insert_message()
+
+            except IntegrityError:
+                profile_checkpoint(
+                    profile_timings_ms,
+                    "service_total",
+                    total_started_at,
+                )
+
+                return _return_existing_idempotent_direct_message(
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    pair_key=pair_key,
+                    normalized_client_message_id=(
+                        normalized_client_message_id
+                    ),
+                    normalized_sender_device_id=(
+                        normalized_sender_device_id
+                    ),
+                    normalized_message_type=normalized_message_type,
+                    normalized_encrypted_payload=(
+                        normalized_encrypted_payload
+                    ),
+                    encryption_metadata=encryption_metadata,
+                    normalized_encryption_version=(
+                        normalized_encryption_version
+                    ),
+                    normalized_reply_to_id=normalized_reply_to_id,
+                    client_sent_at=client_sent_at,
+                    normalized_envelopes=normalized_envelopes,
+                    attachment_ids=attachment_ids,
+                    profile_timings_ms=profile_timings_ms,
+                )
 
         if attachment_ids:
             try:

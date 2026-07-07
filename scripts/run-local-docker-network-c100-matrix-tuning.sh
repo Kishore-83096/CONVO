@@ -133,7 +133,7 @@ for web in "${web_values[@]}"; do
         test_run_id="myna-c100-$(printf '%s' "$stamp" | tr -cd '[:alnum:]')-$slug"
 
         messenger_env=("WEB_CONCURRENCY=$web" "ASGI_THREADS=$asgi_threads" "GUNICORN_BACKLOG=$backlog" "${common_messenger[@]}")
-        messenger_env+=("DB_CONN_MAX_AGE=0" "DB_CONN_HEALTH_CHECKS=true")
+        messenger_env+=("DB_CONN_MAX_AGE=60" "DB_CONN_HEALTH_CHECKS=true")
         runner_env=("MYNA_REPORT_FILE_PREFIX=myna_docker_dns_c100_matrix_$slug" "MYNA_TEST_RUN_ID=$test_run_id" "${common_runner[@]}")
         args=(
           --root "$PWD"

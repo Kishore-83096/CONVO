@@ -149,6 +149,21 @@ REDIS_URL = env(
     default="redis://127.0.0.1:6379/0",
 ).strip()
 
+
+CACHE_REDIS_URL = env(
+    "CACHE_REDIS_URL",
+    default="redis://127.0.0.1:6379/1",
+).strip()
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": CACHE_REDIS_URL,
+        "KEY_PREFIX": "myna:messenger",
+    }
+}
+
+
 REALTIME_TICKET_TTL_SECONDS = env.int(
     "REALTIME_TICKET_TTL_SECONDS",
     default=60,
@@ -163,6 +178,9 @@ REALTIME_HEARTBEAT_SECONDS = env.int(
     "REALTIME_HEARTBEAT_SECONDS",
     default=20,
 )
+
+
+
 
 # =============================================================================
 # File storage

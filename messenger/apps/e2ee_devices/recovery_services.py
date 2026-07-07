@@ -15,14 +15,22 @@ def get_recovery_active_cache_key(user_id: Any) -> str:
     return f"recovery_active:{str(user_id).strip()}"
 
 
+def get_recovery_active_version_cache_key(user_id: Any) -> str:
+    return f"recovery_active_version:{str(user_id).strip()}"
+
+
+
 def invalidate_recovery_active_cache_for_user(user_id: Any) -> None:
     normalized_user_id = str(user_id).strip()
 
     if not normalized_user_id:
         return
 
-    cache.delete(
-        get_recovery_active_cache_key(normalized_user_id)
+    cache.delete_many(
+        [
+            get_recovery_active_cache_key(normalized_user_id),
+            get_recovery_active_version_cache_key(normalized_user_id),
+        ]
     )
 
 
@@ -135,6 +143,94 @@ def recovery_bundle_is_active_for_users(
     )
 
     return bool(active_user_ids)
+
+
+
+def get_active_recovery_versions_for_users(
+    user_ids: Iterable[Any],
+) -> dict[str, int]:
+    """Return active recovery versions using one batched cache/DB lookup.
+
+    A cached value of 0 means that the user has no active recovery bundle.
+    Positive integers are the active server-controlled recovery versions.
+    """
+    normalized_user_ids: list[str] = []
+    seen_user_ids: set[str] = set()
+
+    for user_id in user_ids:
+        normalized_user_id = str(user_id).strip()
+
+        if (
+            not normalized_user_id
+            or normalized_user_id in seen_user_ids
+        ):
+            continue
+
+        seen_user_ids.add(normalized_user_id)
+        normalized_user_ids.append(normalized_user_id)
+
+    if not normalized_user_ids:
+        return {}
+
+    cache_keys_by_user_id = {
+        user_id: get_recovery_active_version_cache_key(user_id)
+        for user_id in normalized_user_ids
+    }
+
+    cached_values = cache.get_many(
+        cache_keys_by_user_id.values()
+    )
+
+    active_versions: dict[str, int] = {}
+    missing_user_ids: list[str] = []
+
+    for user_id in normalized_user_ids:
+        cached_value = cached_values.get(
+            cache_keys_by_user_id[user_id]
+        )
+
+        if (
+            isinstance(cached_value, int)
+            and not isinstance(cached_value, bool)
+            and cached_value >= 0
+        ):
+            if cached_value > 0:
+                active_versions[user_id] = cached_value
+
+            continue
+
+        missing_user_ids.append(user_id)
+
+    if missing_user_ids:
+        database_versions = {
+            str(user_id): int(recovery_version)
+            for user_id, recovery_version in (
+                RecoveryBundle.objects.filter(
+                    user_id__in=missing_user_ids,
+                    is_active=True,
+                    disabled_at__isnull=True,
+                ).values_list(
+                    "user_id",
+                    "recovery_version",
+                )
+            )
+        }
+
+        cache.set_many(
+            {
+                cache_keys_by_user_id[user_id]: database_versions.get(
+                    user_id,
+                    0,
+                )
+                for user_id in missing_user_ids
+            },
+            RECOVERY_ACTIVE_CACHE_TTL_SECONDS,
+        )
+
+        active_versions.update(database_versions)
+
+    return active_versions
+
 
 class RecoveryAlreadyConfiguredError(Exception):
     """Raised when an active recovery bundle already exists."""
