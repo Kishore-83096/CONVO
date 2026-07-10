@@ -148,32 +148,10 @@ class Message(models.Model):
             models.Index(
                 fields=[
                     "room",
-                    "created_at",
-                ],
-                name="msg_room_created_idx",
-            ),
-            models.Index(
-                fields=[
-                    "room",
                     "-created_at",
                     "-id",
                 ],
                 name="msg_room_newest_idx",
-            ),
-            models.Index(
-                fields=[
-                    "sender_user_id",
-                    "created_at",
-                ],
-                name="msg_sender_created_idx",
-            ),
-            models.Index(
-                fields=[
-                    "room",
-                    "message_type",
-                    "created_at",
-                ],
-                name="msg_room_type_time_idx",
             ),
         ]
 

@@ -4,12 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
-    WEB_CONCURRENCY=4 \
-    GUNICORN_THREADS=8 \
-    GUNICORN_BACKLOG=4096 \
-    GUNICORN_TIMEOUT=60 \
-    GUNICORN_GRACEFUL_TIMEOUT=30 \
-    GUNICORN_KEEP_ALIVE=5
+    WEB_CONCURRENCY=1 \
+    GUNICORN_THREADS=4 \
+    GUNICORN_TIMEOUT=60
 
 WORKDIR /app
 
@@ -43,12 +40,10 @@ ENTRYPOINT ["python", "docker_entrypoint.py"]
 CMD ["sh", "-c", "exec gunicorn \
     --bind 0.0.0.0:${PORT:-5000} \
     --worker-class gthread \
-    --workers ${WEB_CONCURRENCY:-4} \
-    --threads ${GUNICORN_THREADS:-8} \
-    --backlog ${GUNICORN_BACKLOG:-4096} \
+    --workers ${WEB_CONCURRENCY:-1} \
+    --threads ${GUNICORN_THREADS:-4} \
     --timeout ${GUNICORN_TIMEOUT:-60} \
-    --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30} \
-    --keep-alive ${GUNICORN_KEEP_ALIVE:-5} \
+    --graceful-timeout 30 \
     --access-logfile - \
     --error-logfile - \
     identity_service:app"]

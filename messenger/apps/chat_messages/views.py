@@ -22,6 +22,8 @@ from messenger_config.benchmark_timing import (
     record_drf_permission_exit,
     record_drf_throttle_entry,
     record_drf_throttle_exit,
+    record_drf_finalize_response_entry,
+    record_drf_finalize_response_exit,
     record_drf_versioning_entry,
     record_drf_versioning_exit,
     record_direct_send_view_entry,
@@ -128,6 +130,19 @@ class DirectSendPreViewTimingMixin:
             record_drf_throttle_exit()
 
 
+    def finalize_response(self, request, response, *args, **kwargs):
+        record_drf_finalize_response_entry()
+        try:
+            return super().finalize_response(
+                request,
+                response,
+                *args,
+                **kwargs,
+            )
+        finally:
+            record_drf_finalize_response_exit()
+
+
 class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
     permission_classes = [
         IsAuthenticated,
@@ -204,7 +219,8 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
             identity_contact_id = None
             existing_room = None
 
-            with profile_database_queries(view_timings_ms):
+            # MYNA_SAFE_SQL_FINGERPRINT_V1
+            with profile_database_queries(view_timings_ms) as db_profile:
                 phase_started_at = time.perf_counter()
 
                 with profile_database_stage("recipient_resolution"):
@@ -424,6 +440,9 @@ class SendDirectMessageView(DirectSendPreViewTimingMixin, APIView):
             )
             response_data["server_timing_ms"] = (
                 result.profile_timings_ms
+            )
+            response_data["db_query_fingerprints"] = (
+                db_profile.query_fingerprint_snapshot()
             )
         else:
             record_direct_send_view_exit()

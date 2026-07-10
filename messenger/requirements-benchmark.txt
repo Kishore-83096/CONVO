@@ -1,5 +1,0 @@
-﻿# Benchmark/test-only dependencies
-# These are NOT production runtime dependencies.
-
-httpx
-cryptography

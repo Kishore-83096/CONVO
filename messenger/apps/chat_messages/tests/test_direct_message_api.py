@@ -611,7 +611,7 @@ class DirectMessageSendingAPITests(APITestCase):
 
     
 
-    def test_existing_room_send_updates_room_timestamp_with_lightweight_update(self):
+    def test_existing_room_send_does_not_touch_room_timestamp(self):
         self.authenticate_as("1")
 
         room = Room.objects.create(
@@ -668,10 +668,11 @@ class DirectMessageSendingAPITests(APITestCase):
         )
 
         room.refresh_from_db()
-        self.assertGreater(
+        self.assertEqual(
             room.updated_at,
             old_updated_at,
         )
+        self.assertEqual(Message.objects.count(), 1)
 
     def test_failed_existing_room_send_does_not_update_room_timestamp(self):
         self.authenticate_as("1")

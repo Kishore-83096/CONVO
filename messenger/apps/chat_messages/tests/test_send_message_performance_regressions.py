@@ -333,16 +333,106 @@ class SendMessagePerformanceRegressionTests(TestCase):
             "service_existing_room_validation",
             result.profile_timings_ms,
         )
-        self.assertIn(
-            "service_room_update",
-            result.profile_timings_ms,
+        self.assertEqual(
+            result.profile_timings_ms["service_room_update"],
+            0.0,
         )
 
         room.refresh_from_db()
-        self.assertGreater(
+        self.assertEqual(
             room.updated_at,
             old_updated_at,
         )
+
+
+    def test_benchmark_skip_direct_room_activity_touch_skips_only_room_update(self):
+        room = Room.objects.create(
+            room_type=Room.RoomType.DIRECT,
+            direct_pair_key=build_direct_pair_key("1", "2"),
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="1",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        RoomMember.objects.create(
+            room=room,
+            user_id="2",
+            role=RoomMember.Role.MEMBER,
+        )
+
+        old_updated_at = timezone.now() - timedelta(days=1)
+
+        Room.objects.filter(
+            id=room.id,
+        ).update(
+            updated_at=old_updated_at,
+        )
+
+        room.refresh_from_db()
+
+        with patch.dict(
+            os.environ,
+            {
+                "MYNA_PROFILE_DIRECT_SEND": "true",
+                "MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH": "true",
+            },
+        ):
+            with CaptureQueriesContext(connection) as captured:
+                result = self.send_message(
+                    client_message_id=uuid.UUID(
+                        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeef"
+                    ),
+                    encrypted_payload=(
+                        "SKIP_ROOM_ACTIVITY_TOUCH_CIPHERTEXT"
+                    ),
+                    existing_room=room,
+                )
+
+        self.assertTrue(result.message_created)
+        self.assertFalse(result.room_created)
+
+        self.assertEqual(
+            result.profile_timings_ms["service_room_update"],
+            0.0,
+        )
+
+        room.refresh_from_db()
+
+        self.assertEqual(
+            room.updated_at,
+            old_updated_at,
+        )
+
+        self.assertEqual(
+            Message.objects.count(),
+            1,
+        )
+
+        self.assertEqual(
+            MessageKeyEnvelope.objects.count(),
+            2,
+        )
+
+        self.assertEqual(
+            RealtimeOutboxEvent.objects.count(),
+            1,
+        )
+
+        room_update_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith("UPDATE")
+            and "messenger_rooms" in query["sql"]
+        ]
+
+        self.assertEqual(
+            room_update_queries,
+            [],
+        )
+
 
     def test_profiled_existing_room_send_failure_does_not_update_room_timestamp(self):
         room = Room.objects.create(

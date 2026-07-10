@@ -1,9 +1,12 @@
 import hashlib
 import os
+import re
+import sys
 import time
 from contextvars import ContextVar
 from contextlib import nullcontext
 from contextlib import contextmanager
+from functools import wraps
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -38,7 +41,7 @@ from .attachment_services import (
 )
 
 
-from django.db.models import Prefetch, QuerySet
+from django.db.models import F, OuterRef, Prefetch, QuerySet, Subquery
 
 from apps.group_chat.models import GroupProfile
 from apps.realtime.events import (
@@ -139,6 +142,22 @@ def direct_send_profile_enabled() -> bool:
         "MYNA_PROFILE_DIRECT_SEND",
         "false",
     ).strip().lower() in {"1", "true", "yes", "on"}
+def benchmark_skip_direct_room_activity_touch_enabled() -> bool:
+    """
+    Benchmark-only diagnostic switch.
+
+    The direct-room activity timestamp update may only be skipped while
+    direct-send benchmark profiling is also explicitly enabled. Production
+    behavior therefore remains unchanged when benchmark profiling is off.
+    """
+
+    if not direct_send_profile_enabled():
+        return False
+
+    return os.getenv(
+        "MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def profile_checkpoint(
@@ -153,6 +172,93 @@ def profile_checkpoint(
         )
 
 
+def profiled_transaction_atomic(*, savepoint: bool = True):
+    """Preserve transaction.atomic semantics while timing its outer boundary."""
+
+    def decorator(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            timings = kwargs.get("profile_timings_ms")
+            atomic_context = transaction.atomic(savepoint=savepoint)
+
+            enter_started_ns = time.perf_counter_ns()
+            atomic_context.__enter__()
+            if timings is not None:
+                timings["db_transaction_enter_ms"] = round(
+                    (
+                        time.perf_counter_ns()
+                        - enter_started_ns
+                    )
+                    / 1_000_000,
+                    2,
+                )
+
+            body_started_ns = time.perf_counter_ns()
+            try:
+                result = function(*args, **kwargs)
+            except BaseException:
+                if timings is not None:
+                    timings["db_transaction_body_ms"] = round(
+                        (
+                            time.perf_counter_ns()
+                            - body_started_ns
+                        )
+                        / 1_000_000,
+                        2,
+                    )
+                exit_started_ns = time.perf_counter_ns()
+                exc_info = sys.exc_info()
+                try:
+                    suppress = atomic_context.__exit__(*exc_info)
+                finally:
+                    if timings is not None:
+                        rollback_ms = round(
+                            (
+                                time.perf_counter_ns()
+                                - exit_started_ns
+                            )
+                            / 1_000_000,
+                            2,
+                        )
+                        timings["db_transaction_rollback_ms"] = rollback_ms
+                        timings["db_transaction_commit_ms"] = 0.0
+                        timings["db_transaction_exit_ms"] = rollback_ms
+                if suppress:
+                    return None
+                raise
+            else:
+                if timings is not None:
+                    timings["db_transaction_body_ms"] = round(
+                        (
+                            time.perf_counter_ns()
+                            - body_started_ns
+                        )
+                        / 1_000_000,
+                        2,
+                    )
+                exit_started_ns = time.perf_counter_ns()
+                try:
+                    atomic_context.__exit__(None, None, None)
+                finally:
+                    if timings is not None:
+                        commit_ms = round(
+                            (
+                                time.perf_counter_ns()
+                                - exit_started_ns
+                            )
+                            / 1_000_000,
+                            2,
+                        )
+                        timings["db_transaction_commit_ms"] = commit_ms
+                        timings["db_transaction_rollback_ms"] = 0.0
+                        timings["db_transaction_exit_ms"] = commit_ms
+                return result
+
+        return wrapped
+
+    return decorator
+
+
 def _profile_percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0
@@ -164,6 +270,56 @@ def _profile_percentile(values: list[float], pct: float) -> float:
     upper = min(lower + 1, len(ordered) - 1)
     weight = rank - lower
     return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 2)
+
+
+
+# MYNA_SAFE_SQL_FINGERPRINT_V1
+# Benchmark-only SQL shape observation. Parameters are never inspected,
+# interpolated, serialized, hashed, or emitted.
+_SQL_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_SQL_LINE_COMMENT_RE = re.compile(r"--[^\r\n]*")
+_SQL_STRING_LITERAL_RE = re.compile(r"'(?:''|[^'])*'")
+_SQL_UUID_LITERAL_RE = re.compile(
+    r"(?i)\b"
+    r"[0-9a-f]{8}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-"
+    r"[0-9a-f]{12}"
+    r"\b"
+)
+_SQL_NAMED_PARAMETER_RE = re.compile(r"%\([^)]+\)s")
+_SQL_DOLLAR_PARAMETER_RE = re.compile(r"\$\d+")
+_SQL_NUMERIC_LITERAL_RE = re.compile(
+    r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])"
+)
+_SQL_PLACEHOLDER_LIST_RE = re.compile(
+    r"\((?:\s*\?\s*,)+\s*\?\s*\)"
+)
+_SQL_WHITESPACE_RE = re.compile(r"\s+")
+_MAX_SQL_FINGERPRINT_LENGTH = 800
+
+
+def normalize_sql_fingerprint(sql: object) -> str:
+    """Return SQL structure without request/user parameter values."""
+    text = str(sql or "")
+    text = _SQL_BLOCK_COMMENT_RE.sub(" ", text)
+    text = _SQL_LINE_COMMENT_RE.sub(" ", text)
+    text = _SQL_STRING_LITERAL_RE.sub("?", text)
+    text = _SQL_UUID_LITERAL_RE.sub("?", text)
+    text = _SQL_NUMERIC_LITERAL_RE.sub("?", text)
+    text = _SQL_NAMED_PARAMETER_RE.sub("?", text)
+    text = text.replace("%s", "?")
+    text = _SQL_DOLLAR_PARAMETER_RE.sub("?", text)
+    text = _SQL_WHITESPACE_RE.sub(" ", text).strip()
+    text = _SQL_PLACEHOLDER_LIST_RE.sub("(?)", text)
+    return text[:_MAX_SQL_FINGERPRINT_LENGTH]
+
+
+def sql_fingerprint_id(fingerprint: str) -> str:
+    return hashlib.sha256(
+        fingerprint.encode("utf-8")
+    ).hexdigest()[:12]
 
 
 _ACTIVE_DB_PROFILE: ContextVar[
@@ -180,6 +336,10 @@ class DirectSendDatabaseProfile:
         self.timings = timings
         self.query_durations_ms: list[float] = []
         self.query_durations_by_stage_ms: dict[str, list[float]] = {}
+        self.query_fingerprint_durations_ms: dict[
+            tuple[str, str, str, str, bool],
+            list[float],
+        ] = {}
         self.operation_counts: dict[str, int] = {
             "select": 0,
             "insert": 0,
@@ -455,6 +615,20 @@ class DirectSendDatabaseProfile:
                 or "unattributed"
             )
 
+            fingerprint = normalize_sql_fingerprint(sql)
+            if fingerprint:
+                fingerprint_key = (
+                    sql_fingerprint_id(fingerprint),
+                    fingerprint,
+                    operation.upper(),
+                    stage,
+                    bool(many),
+                )
+                self.query_fingerprint_durations_ms.setdefault(
+                    fingerprint_key,
+                    [],
+                ).append(duration_ms)
+
             self.query_durations_by_stage_ms.setdefault(
                 stage,
                 [],
@@ -480,6 +654,43 @@ class DirectSendDatabaseProfile:
                 )
                 + 1
             )
+
+    def query_fingerprint_snapshot(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Return benchmark-safe grouped SQL shapes for this request."""
+        rows: list[dict[str, Any]] = []
+
+        for (
+            fingerprint_id,
+            fingerprint,
+            operation,
+            stage,
+            many,
+        ), durations in sorted(
+            self.query_fingerprint_durations_ms.items(),
+            key=lambda item: (
+                -sum(item[1]),
+                item[0][0],
+                item[0][3],
+            ),
+        ):
+            rows.append(
+                {
+                    "fingerprint_id": fingerprint_id,
+                    "fingerprint": fingerprint,
+                    "operation": operation,
+                    "stage": stage,
+                    "many": many,
+                    "calls": len(durations),
+                    "durations_ms": [
+                        round(duration_ms, 3)
+                        for duration_ms in durations
+                    ],
+                }
+            )
+
+        return rows
 
     @staticmethod
     def _operation_for_sql(sql: Any) -> str:
@@ -1360,7 +1571,7 @@ def _upsert_sender_saved_contact_state_from_identity(
 
 
 
-@transaction.atomic(savepoint=False)
+@profiled_transaction_atomic(savepoint=False)
 def send_direct_message(
     *,
     sender_user_id: Any,
@@ -1766,19 +1977,10 @@ def send_direct_message(
         elif profile_timings_ms is not None:
             profile_timings_ms["service_receipt_decision_insert"] = 0.0
 
-        room_updated_at = timezone.now()
-        phase_started_at = time.perf_counter()
-        Room.objects.filter(
-            id=room.id,
-        ).update(
-            updated_at=room_updated_at,
-        )
-        room.updated_at = room_updated_at
-        profile_checkpoint(
-            profile_timings_ms,
-            "service_room_update",
-            phase_started_at,
-        )
+        # Room.updated_at is structural room metadata, not message activity.
+        # Recent-chat ordering is derived from the newest Message.created_at.
+        if profile_timings_ms is not None:
+            profile_timings_ms["service_room_update"] = 0.0
 
         recipient_device_ids = tuple(
             sorted(
@@ -1883,6 +2085,13 @@ def list_user_rooms(
         "id",
     )
 
+    newest_message = Message.objects.filter(
+        room_id=OuterRef("pk"),
+    ).order_by(
+        "-created_at",
+        "-id",
+    )
+
     rooms = list(
         Room.objects.select_related(
             "group_profile",
@@ -1892,6 +2101,14 @@ def list_user_rooms(
             members__user_id=user_id,
             members__is_active=True,
         )
+        .annotate(
+            latest_message_id=Subquery(
+                newest_message.values("id")[:1],
+            ),
+            latest_message_at=Subquery(
+                newest_message.values("created_at")[:1],
+            ),
+        )
         .prefetch_related(
             Prefetch(
                 "members",
@@ -1900,31 +2117,25 @@ def list_user_rooms(
             )
         )
         .order_by(
-            "-updated_at",
+            F("latest_message_at").desc(nulls_last=True),
             "-created_at",
             "id",
         )
         .distinct()
     )
 
-    last_messages = (
-        Message.objects.filter(
-            room__in=rooms,
-        )
-        .order_by(
-            "room_id",
-            "-created_at",
-            "-id",
-        )
-    )
+    latest_message_ids = [
+        room.latest_message_id
+        for room in rooms
+        if room.latest_message_id is not None
+    ]
 
-    last_message_by_room_id = {}
-
-    for message in last_messages:
-        last_message_by_room_id.setdefault(
-            message.room_id,
-            message,
+    last_message_by_room_id = {
+        message.room_id: message
+        for message in Message.objects.filter(
+            id__in=latest_message_ids,
         )
+    }
 
     active_epoch_by_room_id = {
         epoch.group_room_id: epoch

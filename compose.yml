@@ -1,0 +1,234 @@
+name: myna
+
+x-messenger-common: &messenger-common
+  image: myna-messenger:local
+  env_file:
+    - .env
+  networks:
+    - myna-local
+
+services:
+  identity-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${IDENTITY_POSTGRES_DB:?IDENTITY_POSTGRES_DB is required}
+      POSTGRES_USER: ${IDENTITY_POSTGRES_USER:?IDENTITY_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${IDENTITY_POSTGRES_PASSWORD:?IDENTITY_POSTGRES_PASSWORD is required}
+    volumes:
+      - identity_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks:
+      - myna-local
+
+  messenger-postgres:
+    image: postgres:17-alpine
+    command: ["postgres", "-c", "max_connections=150"]
+    environment:
+      POSTGRES_DB: ${MESSENGER_POSTGRES_DB:?MESSENGER_POSTGRES_DB is required}
+      POSTGRES_USER: ${MESSENGER_POSTGRES_USER:?MESSENGER_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${MESSENGER_POSTGRES_PASSWORD:?MESSENGER_POSTGRES_PASSWORD is required}
+    volumes:
+      - messenger_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h 127.0.0.1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    networks:
+      - myna-local
+
+  redis:
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command:
+      [
+        "sh",
+        "-c",
+        "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\"",
+      ]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    networks:
+      - myna-local
+
+  identity-migrate:
+    image: myna-identity:local
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${IDENTITY_DATABASE_URL:?IDENTITY_DATABASE_URL is required}
+      RATELIMIT_STORAGE_URI: memory://
+      IDENTITY_REDIS_URL: ""
+      REDIS_URL: ""
+      CACHE_REDIS_URL: ""
+
+      MESSENGER_SERVICE_BASE_URL: http://messenger:8000
+      CLOUDINARY_FOLDER: ${IDENTITY_CLOUDINARY_FOLDER:-Mynav2/local/profiles}
+    command: ["python", "-m", "flask", "--app", "identity_service:app", "db", "upgrade"]
+    depends_on:
+      identity-postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - myna-local
+
+  identity:
+    image: myna-identity:local
+    build:
+      context: ./identity_service
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${IDENTITY_DATABASE_URL:?IDENTITY_DATABASE_URL is required}
+      RATELIMIT_STORAGE_URI: memory://
+      IDENTITY_REDIS_URL: ""
+      REDIS_URL: ""
+      CACHE_REDIS_URL: ""
+
+      MESSENGER_SERVICE_BASE_URL: http://messenger:8000
+      CLOUDINARY_FOLDER: ${IDENTITY_CLOUDINARY_FOLDER:-Mynav2/local/profiles}
+      WEB_CONCURRENCY: ${IDENTITY_WEB_CONCURRENCY:-4}
+      GUNICORN_THREADS: ${IDENTITY_GUNICORN_THREADS:-8}
+      GUNICORN_TIMEOUT: ${IDENTITY_GUNICORN_TIMEOUT:-60}
+      REGISTER_RATE_LIMIT: ${REGISTER_RATE_LIMIT:-5 per minute}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-10 per minute}
+      RESET_PASSWORD_RATE_LIMIT: ${RESET_PASSWORD_RATE_LIMIT:-5 per minute}
+      DELETE_ACCOUNT_RATE_LIMIT: ${DELETE_ACCOUNT_RATE_LIMIT:-3 per minute}
+      CONTACT_SEARCH_RATE_LIMIT: ${CONTACT_SEARCH_RATE_LIMIT:-20 per minute}
+      CONTACT_ADD_RATE_LIMIT: ${CONTACT_ADD_RATE_LIMIT:-20 per minute}
+      PORT: "5000"
+    ports:
+      - "5000:5000"
+    depends_on:
+      identity-postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/v1/health/', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - myna-local
+
+  messenger-migrate:
+    <<: *messenger-common
+    environment:
+      DATABASE_URL: ${MESSENGER_DATABASE_URL:?MESSENGER_DATABASE_URL is required}
+      IDENTITY_SERVICE_BASE_URL: http://identity:5000/api/v1
+      MESSENGER_SERVICE_BASE_URL: http://messenger:8000
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      CACHE_REDIS_URL: ${CACHE_REDIS_URL:?CACHE_REDIS_URL is required}
+      JWT_VERIFYING_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      CONTACT_POLICY_SYNC_SECRET: ${MESSENGER_INTERNAL_SECRET:?MESSENGER_INTERNAL_SECRET is required}
+      CLOUDINARY_FOLDER: ${MESSENGER_CLOUDINARY_FOLDER:-Mynav2/local/attachments}
+      MESSENGER_PROCESS_ROLE: http
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      messenger-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  messenger:
+    <<: *messenger-common
+    build:
+      context: ./messenger
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: ${MESSENGER_DATABASE_URL:?MESSENGER_DATABASE_URL is required}
+      IDENTITY_SERVICE_BASE_URL: http://identity:5000/api/v1
+      MESSENGER_SERVICE_BASE_URL: http://messenger:8000
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      CACHE_REDIS_URL: ${CACHE_REDIS_URL:?CACHE_REDIS_URL is required}
+      JWT_VERIFYING_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      CONTACT_POLICY_SYNC_SECRET: ${MESSENGER_INTERNAL_SECRET:?MESSENGER_INTERNAL_SECRET is required}
+      CLOUDINARY_FOLDER: ${MESSENGER_CLOUDINARY_FOLDER:-Mynav2/local/attachments}
+      MESSENGER_PROCESS_ROLE: http
+      PORT: "8000"
+      MYNA_BENCHMARK_ASGI_ACCESS_LOG: "1"
+      MYNA_BENCHMARK_ASGI_ACCESS_LOG_FILE: /tmp/myna_benchmark_gunicorn_access.log
+      GUNICORN_ACCESS_LOG_FILE: /tmp/myna_benchmark_gunicorn_access.log
+      GUNICORN_ACCESS_LOG_FORMAT: '%(t)s pid=%(p)s status=%(s)s duration_us=%(D)s method="%(m)s" path="%(U)s" run="%({x-myna-benchmark-run-id}i)s" req="%({x-myna-benchmark-request-id}i)s" phase="%({x-myna-benchmark-phase}i)s" concurrency="%({x-myna-benchmark-concurrency}i)s"'
+      MYNA_PROFILE_DIRECT_SEND: ${MYNA_PROFILE_DIRECT_SEND:-false}
+      MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH: ${MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH:-false}
+    ports:
+      - "8000:8000"
+    depends_on:
+      messenger-migrate:
+        condition: service_completed_successfully
+      identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  messenger-outbox:
+    <<: *messenger-common
+    environment:
+      DATABASE_URL: ${MESSENGER_DATABASE_URL:?MESSENGER_DATABASE_URL is required}
+      IDENTITY_SERVICE_BASE_URL: http://identity:5000/api/v1
+      MESSENGER_SERVICE_BASE_URL: http://messenger:8000
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      CACHE_REDIS_URL: ${CACHE_REDIS_URL:?CACHE_REDIS_URL is required}
+      JWT_VERIFYING_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      CONTACT_POLICY_SYNC_SECRET: ${MESSENGER_INTERNAL_SECRET:?MESSENGER_INTERNAL_SECRET is required}
+      CLOUDINARY_FOLDER: ${MESSENGER_CLOUDINARY_FOLDER:-Mynav2/local/attachments}
+      MESSENGER_PROCESS_ROLE: outbox
+    depends_on:
+      messenger-migrate:
+        condition: service_completed_successfully
+      messenger-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  myna-local:
+    name: myna-local
+
+volumes:
+  identity_postgres_data:
+  messenger_postgres_data:
+  redis_data:

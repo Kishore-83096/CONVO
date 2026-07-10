@@ -12,6 +12,7 @@ from rest_framework.test import APITestCase
 from apps.e2ee_devices.models import Device
 from apps.rooms.models import Room
 
+from ..models import Message
 from ..services import send_direct_message
 
 
@@ -171,7 +172,7 @@ class RoomListAPITests(APITestCase):
 
         self.assert_room_list_response(response)
 
-    def test_room_list_orders_newest_updated_room_first(self):
+    def test_room_list_orders_newest_message_first(self):
         second_room = send_direct_message(
             sender_user_id="1",
             recipient_user_id="3",
@@ -218,11 +219,22 @@ class RoomListAPITests(APITestCase):
             ],
         ).room
 
+        now = timezone.now()
+
+        Message.objects.filter(room_id=self.room.id).update(
+            created_at=now - timedelta(hours=1),
+        )
+        Message.objects.filter(room_id=second_room.id).update(
+            created_at=now - timedelta(hours=2),
+        )
+
+        # Deliberately make room metadata timestamps disagree with message
+        # activity. Ordering must follow the newest server-received message.
         Room.objects.filter(id=self.room.id).update(
-            updated_at=timezone.now() - timedelta(days=2),
+            updated_at=now - timedelta(days=2),
         )
         Room.objects.filter(id=second_room.id).update(
-            updated_at=timezone.now() - timedelta(days=1),
+            updated_at=now - timedelta(days=1),
         )
 
         self.authenticate_as("1")
@@ -237,7 +249,13 @@ class RoomListAPITests(APITestCase):
         self.assertEqual(
             room_ids,
             [
-                str(second_room.id),
                 str(self.room.id),
+                str(second_room.id),
             ],
+        )
+
+        first_item = response.json()["data"][0]
+        self.assertEqual(
+            first_item["updated_at"],
+            first_item["last_message"]["created_at"],
         )

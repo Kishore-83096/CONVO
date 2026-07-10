@@ -291,7 +291,11 @@ class RoomListItemSerializer(serializers.Serializer):
             ),
             "group": group_data,
             "created_at": room.created_at,
-            "updated_at": room.updated_at,
+            "updated_at": (
+                last_message.created_at
+                if last_message is not None
+                else room.updated_at
+            ),
             "last_message": (
                 {
                     "id": str(last_message.id),

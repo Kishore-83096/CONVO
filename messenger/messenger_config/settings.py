@@ -5,6 +5,7 @@ from urllib.parse import unquote, urlparse
 import cloudinary
 import environ
 from django.core.exceptions import ImproperlyConfigured
+from redis.maint_notifications import MaintNotificationsConfig
 
 
 # =============================================================================
@@ -15,69 +16,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 # =============================================================================
-# Environment selection
+# Environment
 # =============================================================================
-#
-# Local:
-#   APP_ENV is not required in PowerShell.
-#   Django defaults to .env.local.
-#
-# Production:
-#   The operating system or hosting platform must set:
-#   APP_ENV=production
-#
-# The APP_ENV value determines which file Django loads:
-#   .env.local
-#   .env.production
-# =============================================================================
+# Docker Compose and GCP inject the complete runtime environment. The Messenger
+# application deliberately does not load service-local .env files.
 
 SUPPORTED_ENVIRONMENTS = {"local", "production"}
-
-SELECTED_ENVIRONMENT = os.getenv(
-    "APP_ENV",
-    "local",
-).strip().lower()
-ENVIRONMENT_WAS_SELECTED = "APP_ENV" in os.environ
-
-if SELECTED_ENVIRONMENT not in SUPPORTED_ENVIRONMENTS:
-    raise ImproperlyConfigured(
-        f"Unsupported APP_ENV value: '{SELECTED_ENVIRONMENT}'. "
-        f"Supported values are: {', '.join(sorted(SUPPORTED_ENVIRONMENTS))}."
-    )
-
-ENV_FILE = BASE_DIR / f".env.{SELECTED_ENVIRONMENT}"
-
-if not ENV_FILE.exists() and not ENVIRONMENT_WAS_SELECTED:
-    raise ImproperlyConfigured(
-        f"Environment file was not found: {ENV_FILE}"
-    )
-
 env = environ.Env()
-
-# Existing operating-system environment variables take priority over
-# values stored in the selected .env file.
-if ENV_FILE.exists():
-    environ.Env.read_env(
-        env_file=str(ENV_FILE),
-        overwrite=False,
-    )
-
-APP_ENV = env(
-    "APP_ENV",
-    default=SELECTED_ENVIRONMENT,
-).strip().lower()
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower()
 
 if APP_ENV not in SUPPORTED_ENVIRONMENTS:
     raise ImproperlyConfigured(
-        f"The selected environment file contains an invalid APP_ENV "
-        f"value: '{APP_ENV}'."
-    )
-
-if APP_ENV != SELECTED_ENVIRONMENT:
-    raise ImproperlyConfigured(
-        f"Environment mismatch: the operating system selected "
-        f"'{SELECTED_ENVIRONMENT}', but {ENV_FILE.name} declares "
-        f"APP_ENV='{APP_ENV}'."
+        f"Unsupported APP_ENV value: {APP_ENV!r}. "
+        f"Supported values are: {', '.join(sorted(SUPPORTED_ENVIRONMENTS))}."
     )
 
 
@@ -104,7 +55,7 @@ if env.bool("MESSENGER_DOCKER", default=False):
                 *ALLOWED_HOSTS,
                 "127.0.0.1",
                 "localhost",
-                "messenger-service-local",
+                "messenger",
             ]
         )
     )
@@ -125,7 +76,7 @@ IDENTITY_SERVICE_BASE_URL = env(
 
 MESSENGER_SERVICE_BASE_URL = env(
     "MESSENGER_SERVICE_BASE_URL",
-    default="http://127.0.0.1:8000",
+    default="http://messenger:8000",
 ).strip().rstrip("/")
 
 FRONTEND_ORIGINS = env.list(
@@ -146,19 +97,28 @@ CONTACT_POLICY_SYNC_SECRET = env(
 
 REDIS_URL = env(
     "REDIS_URL",
-    default="redis://127.0.0.1:6379/0",
+    default="redis://redis:6379/0",
 ).strip()
 
 
 CACHE_REDIS_URL = env(
     "CACHE_REDIS_URL",
-    default="redis://127.0.0.1:6379/1",
+    default="redis://redis:6379/1",
 ).strip()
+
+REDIS_MAINT_NOTIFICATIONS_CONFIG = MaintNotificationsConfig(
+    enabled=False,
+)
 
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": CACHE_REDIS_URL,
+        "OPTIONS": {
+            "maint_notifications_config": (
+                REDIS_MAINT_NOTIFICATIONS_CONFIG
+            ),
+        },
         "KEY_PREFIX": "myna:messenger",
     }
 }
@@ -432,12 +392,16 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-if os.getenv("MYNA_BENCHMARK_ASGI_ACCESS_LOG", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}:
+_BENCHMARK_TIMING_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BENCHMARK_REQUEST_TIMING_ENABLED = any(
+    os.getenv(name, "").strip().lower() in _BENCHMARK_TIMING_TRUE_VALUES
+    for name in (
+        "MYNA_BENCHMARK_ASGI_ACCESS_LOG",
+        "MYNA_PROFILE_DIRECT_SEND",
+    )
+)
+
+if _BENCHMARK_REQUEST_TIMING_ENABLED:
     MIDDLEWARE.insert(
         0,
         "messenger_config.benchmark_timing.BenchmarkPreViewTimingMiddleware",
@@ -499,14 +463,9 @@ MESSENGER_PROCESS_ROLE = env(
     default="http",
 ).strip().lower()
 
-if MESSENGER_PROCESS_ROLE not in {
-    "http",
-    "websocket",
-    "outbox",
-}:
+if MESSENGER_PROCESS_ROLE not in {"http", "outbox"}:
     raise ImproperlyConfigured(
-        "MESSENGER_PROCESS_ROLE must be one of: "
-        "http, websocket, outbox."
+        "MESSENGER_PROCESS_ROLE must be one of: http, outbox."
     )
 
 MESSENGER_HTTP_SERVER_MODE = env(
@@ -556,6 +515,11 @@ DATABASES["default"]["CONN_MAX_AGE"] = env.int(
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = env.bool(
     "DB_CONN_HEALTH_CHECKS",
     default=True,
+)
+
+MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH = env.bool(
+    "MYNA_BENCHMARK_SKIP_DIRECT_ROOM_ACTIVITY_TOUCH",
+    default=False,
 )
 
 MESSENGER_RUNTIME_CONFIGURATION = {

@@ -76,7 +76,7 @@ def policy_ghost_is_active(
     return policy.ghost_until > timezone.now()
 
 
-DELIVERY_POLICY_SNAPSHOT_CACHE_TTL_SECONDS = 30
+DELIVERY_POLICY_SNAPSHOT_CACHE_TTL_SECONDS = 600
 
 
 def get_delivery_policy_cache_key(

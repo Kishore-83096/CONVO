@@ -208,3 +208,15 @@ def validate_configuration(
             "FRONTEND_ORIGINS must contain at "
             "least one allowed frontend origin."
         )
+
+    # Identity rate limiting is Redis-free by architecture.
+    # Redis belongs to Messenger realtime/presence only.
+    rate_limit_storage_uri = str(
+        app.config.get("RATELIMIT_STORAGE_URI") or ""
+    ).strip()
+
+    if rate_limit_storage_uri != "memory://":
+        raise RuntimeError(
+            "Identity RATELIMIT_STORAGE_URI must be memory://. "
+            "Redis is reserved for the Messenger service."
+        )

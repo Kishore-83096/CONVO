@@ -1,0 +1,71 @@
+diff --git a/messenger/apps/chat_messages/migrations/0011_remove_unused_message_indexes.py b/messenger/apps/chat_messages/migrations/0011_remove_unused_message_indexes.py
+new file mode 100644
+index 0000000..b0a6a1d
+--- /dev/null
++++ b/messenger/apps/chat_messages/migrations/0011_remove_unused_message_indexes.py
+@@ -0,0 +1,25 @@
++# Generated for the Myna message-insert index A/B benchmark.
++
++from django.db import migrations
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ("chat_messages", "0010_send_hot_path_indexes"),
++    ]
++
++    operations = [
++        migrations.RemoveIndex(
++            model_name="message",
++            name="msg_room_created_idx",
++        ),
++        migrations.RemoveIndex(
++            model_name="message",
++            name="msg_sender_created_idx",
++        ),
++        migrations.RemoveIndex(
++            model_name="message",
++            name="msg_room_type_time_idx",
++        ),
++    ]
+diff --git a/messenger/apps/chat_messages/models.py b/messenger/apps/chat_messages/models.py
+index f27b16b..bf91098 100644
+--- a/messenger/apps/chat_messages/models.py
++++ b/messenger/apps/chat_messages/models.py
+@@ -145,13 +145,6 @@ class Message(models.Model):
+         ]
+ 
+         indexes = [
+-            models.Index(
+-                fields=[
+-                    "room",
+-                    "created_at",
+-                ],
+-                name="msg_room_created_idx",
+-            ),
+             models.Index(
+                 fields=[
+                     "room",
+@@ -160,21 +153,6 @@ class Message(models.Model):
+                 ],
+                 name="msg_room_newest_idx",
+             ),
+-            models.Index(
+-                fields=[
+-                    "sender_user_id",
+-                    "created_at",
+-                ],
+-                name="msg_sender_created_idx",
+-            ),
+-            models.Index(
+-                fields=[
+-                    "room",
+-                    "message_type",
+-                    "created_at",
+-                ],
+-                name="msg_room_type_time_idx",
+-            ),
+         ]
+ 
+     def __str__(self) -> str:

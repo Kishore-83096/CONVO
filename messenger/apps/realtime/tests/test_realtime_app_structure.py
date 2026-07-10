@@ -68,7 +68,7 @@ class RealtimeAppStructureTests(SimpleTestCase):
         )
         self.assertEqual(
             messenger_settings.resolve_db_conn_max_age_default(
-                process_role="websocket",
+                process_role="http",
                 http_server_mode="asgi",
             ),
             0,

@@ -65,7 +65,7 @@ def _normalize_user_id(user_id: Any) -> str:
 
     return normalized
 
-ACTIVE_DEVICE_IDS_CACHE_TTL_SECONDS = 30
+ACTIVE_DEVICE_IDS_CACHE_TTL_SECONDS = 600
 
 
 def get_active_device_ids_cache_key(user_id: str) -> str:

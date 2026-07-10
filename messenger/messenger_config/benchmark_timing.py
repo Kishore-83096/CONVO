@@ -10,6 +10,7 @@ import time
 class BenchmarkRequestTiming:
     server_entry_ns: int
     django_asgi_entry_ns: int | None = None
+    django_wsgi_entry_ns: int | None = None
     django_middleware_entry_ns: int | None = None
     drf_dispatch_entry_ns: int | None = None
     drf_initialize_request_entry_ns: int | None = None
@@ -26,10 +27,16 @@ class BenchmarkRequestTiming:
     drf_permission_exit_ns: int | None = None
     drf_throttle_entry_ns: int | None = None
     drf_throttle_exit_ns: int | None = None
+    drf_finalize_response_entry_ns: int | None = None
+    drf_finalize_response_exit_ns: int | None = None
     view_entry_ns: int | None = None
     view_exit_ns: int | None = None
     response_start_ns: int | None = None
     response_complete_ns: int | None = None
+    wsgi_start_response_ns: int | None = None
+    wsgi_app_return_ns: int | None = None
+    wsgi_response_iter_start_ns: int | None = None
+    wsgi_response_complete_ns: int | None = None
     server_return_ns: int | None = None
     thread_observations: dict[str, tuple[int, str]] = field(default_factory=dict)
     warning_codes: list[str] = field(default_factory=list)
@@ -94,6 +101,15 @@ def record_django_asgi_entry(ns: int | None = None) -> int:
         "django_asgi_entry_ns",
         ns=ns,
         thread_boundary="django_asgi_entry",
+        only_if_missing=True,
+    )
+
+
+def record_django_wsgi_entry(ns: int | None = None) -> int:
+    return _record_timestamp(
+        "django_wsgi_entry_ns",
+        ns=ns,
+        thread_boundary="django_wsgi_entry",
         only_if_missing=True,
     )
 
@@ -180,6 +196,21 @@ def record_drf_throttle_exit(ns: int | None = None) -> int:
     return _record_timestamp("drf_throttle_exit_ns", ns=ns)
 
 
+def record_drf_finalize_response_entry(ns: int | None = None) -> int:
+    return _record_timestamp(
+        "drf_finalize_response_entry_ns",
+        ns=ns,
+        only_if_missing=True,
+    )
+
+
+def record_drf_finalize_response_exit(ns: int | None = None) -> int:
+    return _record_timestamp(
+        "drf_finalize_response_exit_ns",
+        ns=ns,
+    )
+
+
 def record_direct_send_view_entry(ns: int | None = None) -> int:
     return _record_timestamp(
         "view_entry_ns",
@@ -196,8 +227,8 @@ class BenchmarkPreViewTimingMiddleware:
     """
     Benchmark-only marker for the first Django middleware request boundary.
 
-    It is inserted by settings only when benchmark ASGI access timing is
-    enabled. The middleware is otherwise a transparent pass-through.
+    It is inserted only for benchmark timing/profiling runs. The middleware
+    is otherwise a transparent pass-through and is not active in production.
     """
 
     def __init__(self, get_response):

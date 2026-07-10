@@ -8,7 +8,7 @@ from django.utils import timezone
 from .models import RecoveryBundle
 
 
-RECOVERY_ACTIVE_CACHE_TTL_SECONDS = 30
+RECOVERY_ACTIVE_CACHE_TTL_SECONDS = 600
 
 
 def get_recovery_active_cache_key(user_id: Any) -> str:

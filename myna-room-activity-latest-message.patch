@@ -1,0 +1,242 @@
+diff --git a/messenger/apps/chat_messages/serializers.py b/messenger/apps/chat_messages/serializers.py
+index eafc389..c044630 100644
+--- a/messenger/apps/chat_messages/serializers.py
++++ b/messenger/apps/chat_messages/serializers.py
+@@ -291,7 +291,11 @@ class RoomListItemSerializer(serializers.Serializer):
+             ),
+             "group": group_data,
+             "created_at": room.created_at,
+-            "updated_at": room.updated_at,
++            "updated_at": (
++                last_message.created_at
++                if last_message is not None
++                else room.updated_at
++            ),
+             "last_message": (
+                 {
+                     "id": str(last_message.id),
+diff --git a/messenger/apps/chat_messages/services.py b/messenger/apps/chat_messages/services.py
+index 6d9f4f7..5899a04 100644
+--- a/messenger/apps/chat_messages/services.py
++++ b/messenger/apps/chat_messages/services.py
+@@ -41,7 +41,7 @@ from .attachment_services import (
+ )
+ 
+ 
+-from django.db.models import Prefetch, QuerySet
++from django.db.models import F, OuterRef, Prefetch, QuerySet, Subquery
+ 
+ from apps.group_chat.models import GroupProfile
+ from apps.realtime.events import (
+@@ -1979,26 +1979,10 @@ def send_direct_message(
+         elif profile_timings_ms is not None:
+             profile_timings_ms["service_receipt_decision_insert"] = 0.0
+ 
+-        if benchmark_skip_direct_room_activity_touch_enabled():
+-            if profile_timings_ms is not None:
+-                profile_timings_ms["service_room_update"] = 0.0
+-        else:
+-            room_updated_at = timezone.now()
+-            phase_started_at = time.perf_counter()
+-
+-            Room.objects.filter(
+-                id=room.id,
+-            ).update(
+-                updated_at=room_updated_at,
+-            )
+-
+-            room.updated_at = room_updated_at
+-
+-            profile_checkpoint(
+-                profile_timings_ms,
+-                "service_room_update",
+-                phase_started_at,
+-            )
++        # Room.updated_at is structural room metadata, not message activity.
++        # Recent-chat ordering is derived from the newest Message.created_at.
++        if profile_timings_ms is not None:
++            profile_timings_ms["service_room_update"] = 0.0
+ 
+         recipient_device_ids = tuple(
+             sorted(
+@@ -2103,6 +2087,13 @@ def list_user_rooms(
+         "id",
+     )
+ 
++    newest_message = Message.objects.filter(
++        room_id=OuterRef("pk"),
++    ).order_by(
++        "-created_at",
++        "-id",
++    )
++
+     rooms = list(
+         Room.objects.select_related(
+             "group_profile",
+@@ -2112,6 +2103,14 @@ def list_user_rooms(
+             members__user_id=user_id,
+             members__is_active=True,
+         )
++        .annotate(
++            latest_message_id=Subquery(
++                newest_message.values("id")[:1],
++            ),
++            latest_message_at=Subquery(
++                newest_message.values("created_at")[:1],
++            ),
++        )
+         .prefetch_related(
+             Prefetch(
+                 "members",
+@@ -2120,31 +2119,25 @@ def list_user_rooms(
+             )
+         )
+         .order_by(
+-            "-updated_at",
++            F("latest_message_at").desc(nulls_last=True),
+             "-created_at",
+             "id",
+         )
+         .distinct()
+     )
+ 
+-    last_messages = (
+-        Message.objects.filter(
+-            room__in=rooms,
+-        )
+-        .order_by(
+-            "room_id",
+-            "-created_at",
+-            "-id",
+-        )
+-    )
+-
+-    last_message_by_room_id = {}
++    latest_message_ids = [
++        room.latest_message_id
++        for room in rooms
++        if room.latest_message_id is not None
++    ]
+ 
+-    for message in last_messages:
+-        last_message_by_room_id.setdefault(
+-            message.room_id,
+-            message,
++    last_message_by_room_id = {
++        message.room_id: message
++        for message in Message.objects.filter(
++            id__in=latest_message_ids,
+         )
++    }
+ 
+     active_epoch_by_room_id = {
+         epoch.group_room_id: epoch
+diff --git a/messenger/apps/chat_messages/tests/test_direct_message_api.py b/messenger/apps/chat_messages/tests/test_direct_message_api.py
+index 2716b04..c5b0282 100644
+--- a/messenger/apps/chat_messages/tests/test_direct_message_api.py
++++ b/messenger/apps/chat_messages/tests/test_direct_message_api.py
+@@ -611,7 +611,7 @@ class DirectMessageSendingAPITests(APITestCase):
+ 
+     
+ 
+-    def test_existing_room_send_updates_room_timestamp_with_lightweight_update(self):
++    def test_existing_room_send_does_not_touch_room_timestamp(self):
+         self.authenticate_as("1")
+ 
+         room = Room.objects.create(
+@@ -668,10 +668,11 @@ class DirectMessageSendingAPITests(APITestCase):
+         )
+ 
+         room.refresh_from_db()
+-        self.assertGreater(
++        self.assertEqual(
+             room.updated_at,
+             old_updated_at,
+         )
++        self.assertEqual(Message.objects.count(), 1)
+ 
+     def test_failed_existing_room_send_does_not_update_room_timestamp(self):
+         self.authenticate_as("1")
+diff --git a/messenger/apps/chat_messages/tests/test_room_list_api.py b/messenger/apps/chat_messages/tests/test_room_list_api.py
+index 54f1dc5..0202aa9 100644
+--- a/messenger/apps/chat_messages/tests/test_room_list_api.py
++++ b/messenger/apps/chat_messages/tests/test_room_list_api.py
+@@ -12,6 +12,7 @@ from rest_framework.test import APITestCase
+ from apps.e2ee_devices.models import Device
+ from apps.rooms.models import Room
+ 
++from ..models import Message
+ from ..services import send_direct_message
+ 
+ 
+@@ -171,7 +172,7 @@ class RoomListAPITests(APITestCase):
+ 
+         self.assert_room_list_response(response)
+ 
+-    def test_room_list_orders_newest_updated_room_first(self):
++    def test_room_list_orders_newest_message_first(self):
+         second_room = send_direct_message(
+             sender_user_id="1",
+             recipient_user_id="3",
+@@ -218,11 +219,22 @@ class RoomListAPITests(APITestCase):
+             ],
+         ).room
+ 
++        now = timezone.now()
++
++        Message.objects.filter(room_id=self.room.id).update(
++            created_at=now - timedelta(hours=1),
++        )
++        Message.objects.filter(room_id=second_room.id).update(
++            created_at=now - timedelta(hours=2),
++        )
++
++        # Deliberately make room metadata timestamps disagree with message
++        # activity. Ordering must follow the newest server-received message.
+         Room.objects.filter(id=self.room.id).update(
+-            updated_at=timezone.now() - timedelta(days=2),
++            updated_at=now - timedelta(days=2),
+         )
+         Room.objects.filter(id=second_room.id).update(
+-            updated_at=timezone.now() - timedelta(days=1),
++            updated_at=now - timedelta(days=1),
+         )
+ 
+         self.authenticate_as("1")
+@@ -237,7 +249,13 @@ class RoomListAPITests(APITestCase):
+         self.assertEqual(
+             room_ids,
+             [
+-                str(second_room.id),
+                 str(self.room.id),
++                str(second_room.id),
+             ],
+         )
++
++        first_item = response.json()["data"][0]
++        self.assertEqual(
++            first_item["updated_at"],
++            first_item["last_message"]["created_at"],
++        )
+diff --git a/messenger/apps/chat_messages/tests/test_send_message_performance_regressions.py b/messenger/apps/chat_messages/tests/test_send_message_performance_regressions.py
+index d1d5a7d..e5c1ad4 100644
+--- a/messenger/apps/chat_messages/tests/test_send_message_performance_regressions.py
++++ b/messenger/apps/chat_messages/tests/test_send_message_performance_regressions.py
+@@ -333,13 +333,13 @@ class SendMessagePerformanceRegressionTests(TestCase):
+             "service_existing_room_validation",
+             result.profile_timings_ms,
+         )
+-        self.assertIn(
+-            "service_room_update",
+-            result.profile_timings_ms,
++        self.assertEqual(
++            result.profile_timings_ms["service_room_update"],
++            0.0,
+         )
+ 
+         room.refresh_from_db()
+-        self.assertGreater(
++        self.assertEqual(
+             room.updated_at,
+             old_updated_at,
+         )
