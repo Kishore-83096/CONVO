@@ -34,6 +34,9 @@ def create_device(
     )
 
 
+@override_settings(
+    ATTACHMENT_VERIFY_CLOUDINARY_ON_COMPLETE=False,
+)
 class EncryptedAttachmentAPITests(APITestCase):
     def initiate_url(self):
         return reverse("chat_messages:encrypted-attachment-initiate")

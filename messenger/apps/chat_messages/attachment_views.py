@@ -23,6 +23,7 @@ from .attachment_services import (
     get_encrypted_attachment_download,
     initiate_encrypted_attachment,
 )
+from .models import EncryptedAttachment
 
 
 def _validation_error_response(errors):
@@ -213,6 +214,12 @@ class EncryptedAttachmentCompleteView(APIView):
             return _service_error_response(
                 error,
                 status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if attachment.upload_status == EncryptedAttachment.UploadStatus.EXPIRED:
+            return _service_error_response(
+                "Attachment upload signature has expired.",
+                status.HTTP_409_CONFLICT,
             )
 
         return Response(

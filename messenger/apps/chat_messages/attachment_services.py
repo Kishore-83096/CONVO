@@ -306,6 +306,7 @@ def initiate_encrypted_attachment(
     return attachment
 
 
+@transaction.atomic
 def complete_encrypted_attachment(
     *,
     authenticated_user_id: Any,
@@ -357,9 +358,7 @@ def complete_encrypted_attachment(
             ]
         )
 
-        raise AttachmentConflictError(
-            "Attachment upload signature has expired."
-        )
+        return attachment
 
     try:
         ciphertext_size = int(ciphertext_size)
@@ -453,18 +452,17 @@ def complete_encrypted_attachment(
     try:
         attachment.full_clean()
 
-        with transaction.atomic():
-            attachment.save(
-                update_fields=[
-                    "ciphertext_sha256",
-                    "ciphertext_size",
-                    "completed_at",
-                    "upload_status",
-                    "upload_completed_verified_at",
-                    "cloudinary_asset_id",
-                    "cloudinary_version",
-                ]
-            )
+        attachment.save(
+            update_fields=[
+                "ciphertext_sha256",
+                "ciphertext_size",
+                "completed_at",
+                "upload_status",
+                "upload_completed_verified_at",
+                "cloudinary_asset_id",
+                "cloudinary_version",
+            ]
+        )
     except DjangoValidationError as error:
         raise AttachmentValidationError(
             error.message_dict

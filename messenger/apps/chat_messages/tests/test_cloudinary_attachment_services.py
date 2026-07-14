@@ -44,7 +44,7 @@ class CloudinaryAttachmentServiceTests(SimpleTestCase):
 
         self.assertEqual(
             public_id,
-            f"myna/test/attachments/10/device-uuid/{attachment_id}",
+            f"myna/test/attachments/10/device-uuid/{attachment_id}.enc",
         )
 
     @override_settings(
@@ -62,6 +62,7 @@ class CloudinaryAttachmentServiceTests(SimpleTestCase):
         self.assertTrue(
             public_id.startswith("myna/test/attachments/")
         )
+        self.assertTrue(public_id.endswith(".enc"))
 
     @override_settings(
         ATTACHMENT_MIN_TTL_SECONDS=60,
@@ -111,7 +112,14 @@ class CloudinaryAttachmentServiceTests(SimpleTestCase):
     )
     def test_sign_cloudinary_upload_returns_signature(self):
         signature = sign_cloudinary_upload(
-            public_id="myna/test/attachments/10/device/attachment",
+            public_id=(
+                "myna/test/attachments/"
+                "10/device/attachment.enc"
+            ),
+            asset_folder=(
+                "myna/test/attachments/"
+                "10/device"
+            ),
             timestamp=1782734650,
         )
 
@@ -132,7 +140,10 @@ class CloudinaryAttachmentServiceTests(SimpleTestCase):
         attachment = SimpleNamespace(
             id=attachment_id,
             storage_provider="cloudinary",
-            storage_key=f"myna/test/attachments/10/device/{attachment_id}",
+            storage_key=(
+                "myna/test/attachments/"
+                f"10/device/{attachment_id}.enc"
+            ),
         )
 
         payload = build_signed_upload_payload(
@@ -146,16 +157,29 @@ class CloudinaryAttachmentServiceTests(SimpleTestCase):
         self.assertEqual(payload["api_key"], "public-api-key")
         self.assertEqual(payload["resource_type"], "raw")
         self.assertEqual(
+            payload["asset_folder"],
+            "myna/test/attachments/10/device",
+        )
+        self.assertEqual(
+            payload["folder"],
+            payload["asset_folder"],
+        )
+        self.assertTrue(
+            payload["public_id"].startswith(
+                f'{payload["asset_folder"]}/'
+            )
+        )
+        self.assertEqual(
             payload["upload_url"],
             "https://api.cloudinary.com/v1_1/test-cloud/raw/upload",
         )
         self.assertEqual(
             payload["public_id"],
-            f"myna/test/attachments/10/device/{attachment_id}",
+            f"myna/test/attachments/10/device/{attachment_id}.enc",
         )
         self.assertEqual(
             payload["storage_key"],
-            f"myna/test/attachments/10/device/{attachment_id}",
+            f"myna/test/attachments/10/device/{attachment_id}.enc",
         )
         self.assertTrue(payload["signature"])
         self.assertIn("expires_at", payload)

@@ -1,3 +1,4 @@
+import logging
 import re
 import cloudinary
 import cloudinary.api
@@ -10,6 +11,9 @@ from urllib.parse import unquote, urlparse
 from cloudinary.utils import api_sign_request, cloudinary_url
 from django.conf import settings
 from django.utils import timezone
+
+
+logger = logging.getLogger(__name__)
 
 
 class CloudinaryAttachmentConfigurationError(Exception):
@@ -215,7 +219,9 @@ def build_attachment_public_id(
         field_name="attachment_id",
     )
 
-    return f"{folder}/{safe_attachment_id}"
+    # Cloudinary raw assets require the extension to be part of public_id.
+    # This is an encrypted binary container, not the user's original filename.
+    return f"{folder}/{safe_attachment_id}.enc"
 
 
 def build_upload_url(
@@ -232,19 +238,40 @@ def build_upload_url(
 def sign_cloudinary_upload(
     *,
     public_id: str,
+    asset_folder: str,
     timestamp: int,
 ) -> str:
+    """
+    Sign the exact parameters the browser will send to Cloudinary.
+
+    In Cloudinary dynamic-folder mode, public_id controls the permanent
+    asset identifier while asset_folder controls where the asset appears
+    in the Cloudinary Media Library.
+    """
+
     config = get_cloudinary_config()
 
-    normalized_public_id = str(public_id or "").strip().strip("/")
+    normalized_public_id = str(
+        public_id or ""
+    ).strip().strip("/")
+
+    normalized_asset_folder = str(
+        asset_folder or ""
+    ).strip().strip("/")
 
     if not normalized_public_id:
         raise CloudinaryAttachmentConfigurationError(
             "public_id is required for Cloudinary upload signing."
         )
 
+    if not normalized_asset_folder:
+        raise CloudinaryAttachmentConfigurationError(
+            "asset_folder is required for Cloudinary upload signing."
+        )
+
     return api_sign_request(
         {
+            "asset_folder": normalized_asset_folder,
             "public_id": normalized_public_id,
             "timestamp": int(timestamp),
         },
@@ -278,12 +305,22 @@ def build_signed_upload_payload(
             "Attachment storage_key/public_id is required."
         )
 
-    signature = sign_cloudinary_upload(
-        public_id=public_id,
-        timestamp=timestamp,
+    asset_folder = (
+        public_id.rsplit("/", 1)[0]
+        if "/" in public_id
+        else ""
     )
 
-    folder = public_id.rsplit("/", 1)[0] if "/" in public_id else ""
+    if not asset_folder:
+        raise CloudinaryAttachmentConfigurationError(
+            "Attachment asset_folder could not be derived from public_id."
+        )
+
+    signature = sign_cloudinary_upload(
+        public_id=public_id,
+        asset_folder=asset_folder,
+        timestamp=timestamp,
+    )
 
     return {
         "attachment_id": str(attachment.id),
@@ -295,7 +332,13 @@ def build_signed_upload_payload(
             resource_type=resource_type,
         ),
         "resource_type": resource_type,
-        "folder": folder,
+
+        # Retained for compatibility with the existing frontend response shape.
+        "folder": asset_folder,
+
+        # This is the actual Cloudinary dynamic-folder upload parameter.
+        "asset_folder": asset_folder,
+
         "public_id": public_id,
         "storage_key": public_id,
         "timestamp": timestamp,
@@ -352,6 +395,11 @@ def verify_cloudinary_raw_attachment(
             resource_type=resource_type,
         )
     except Exception as error:
+        logger.exception(
+            "Cloudinary attachment verification failed for public_id=%s resource_type=%s",
+            normalized_public_id,
+            resource_type,
+        )
         raise CloudinaryAttachmentConfigurationError(
             "Could not verify Cloudinary encrypted attachment upload."
         ) from error

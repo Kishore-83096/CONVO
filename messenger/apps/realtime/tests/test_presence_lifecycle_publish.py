@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from channels.testing import WebsocketCommunicator
+from django.core.cache import cache
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from unittest.mock import patch
@@ -109,6 +110,7 @@ class PresenceLifecyclePublishTests(TransactionTestCase):
     )
 
     def setUp(self):
+        cache.clear()
         self.redis = FakeAsyncRedis()
 
         self.subject_device = Device.objects.create(

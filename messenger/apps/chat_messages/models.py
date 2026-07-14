@@ -723,6 +723,7 @@ class MessageKeyEnvelope(models.Model):
         Message,
         on_delete=models.CASCADE,
         related_name="key_envelopes",
+        db_index=False,
     )
 
     recipient_user_id = models.CharField(
@@ -733,6 +734,7 @@ class MessageKeyEnvelope(models.Model):
         Device,
         on_delete=models.PROTECT,
         related_name="message_key_envelopes",
+        db_index=False,
     )
 
     protocol = models.CharField(

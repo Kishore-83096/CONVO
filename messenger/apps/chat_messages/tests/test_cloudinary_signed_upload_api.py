@@ -141,6 +141,24 @@ class CloudinarySignedUploadAPITests(APITestCase):
         self.assertEqual(payload["cloud_name"], "test-cloud")
         self.assertEqual(payload["api_key"], "public-api-key")
         self.assertEqual(payload["resource_type"], "raw")
+        self.assertIn(
+            "asset_folder",
+            payload,
+        )
+        self.assertEqual(
+            payload["folder"],
+            payload["asset_folder"],
+        )
+        self.assertTrue(
+            payload["public_id"].startswith(
+                f'{payload["asset_folder"]}/'
+            )
+        )
+        self.assertTrue(
+            payload["public_id"].endswith(
+                ".enc"
+            )
+        )
         self.assertEqual(
             payload["upload_url"],
             "https://api.cloudinary.com/v1_1/test-cloud/raw/upload",
@@ -166,6 +184,8 @@ class CloudinarySignedUploadAPITests(APITestCase):
         self.assertEqual(attachment.resource_type, "raw")
         self.assertEqual(attachment.ciphertext_size_hint, 4096)
         self.assertEqual(attachment.storage_key, payload["public_id"])
+        self.assertTrue(payload["public_id"].endswith(".enc"))
+        self.assertTrue(payload["storage_key"].endswith(".enc"))
         self.assertEqual(attachment.storage_key, payload["storage_key"])
         self.assertIsNotNone(attachment.upload_signature_expires_at)
 

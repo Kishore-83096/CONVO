@@ -15,7 +15,7 @@ from apps.chat_messages.models import (
     GroupMessageEncryption,
     Message,
 )
-from apps.e2ee_devices.models import Device
+from apps.e2ee_devices.models import Device, RecoveryBundle
 from apps.group_chat.models import (
     GroupEncryptionEpoch,
     GroupSenderKey,
@@ -137,6 +137,24 @@ class DirectMessageAttachmentLinkingAPITests(APITestCase):
         self.recipient_device = create_device(
             user_id=self.recipient_user_id,
         )
+        for user_id in (
+            self.sender_user_id,
+            self.recipient_user_id,
+        ):
+            RecoveryBundle.objects.create(
+                user_id=user_id,
+                recovery_public_key=f"USER_{user_id}_RECOVERY_PUBLIC",
+                encrypted_recovery_private_key=(
+                    f"USER_{user_id}_ENCRYPTED_PRIVATE"
+                ),
+                encryption_metadata={
+                    "algorithm": "xchacha20poly1305-ietf",
+                    "nonce": f"USER_{user_id}_NONCE",
+                    "unlock_method": "recovery_key",
+                },
+                recovery_version=1,
+                is_active=True,
+            )
 
         self.url = reverse("chat_messages:send-direct-message")
 
@@ -210,6 +228,28 @@ class DirectMessageAttachmentLinkingAPITests(APITestCase):
                     "key_wrap_metadata": {
                         "algorithm": "double-ratchet",
                         "message_number": 1,
+                    },
+                    "envelope_version": 1,
+                },
+            ],
+            "recovery_envelopes": [
+                {
+                    "recovery_owner_user_id": self.sender_user_id,
+                    "recovery_key_version": 1,
+                    "wrapped_message_key": "SENDER_RECOVERY_WRAPPED_KEY",
+                    "key_wrap_metadata": {
+                        "algorithm": "recovery-box-v1",
+                        "nonce": "SENDER_RECOVERY_NONCE",
+                    },
+                    "envelope_version": 1,
+                },
+                {
+                    "recovery_owner_user_id": self.recipient_user_id,
+                    "recovery_key_version": 1,
+                    "wrapped_message_key": "RECIPIENT_RECOVERY_WRAPPED_KEY",
+                    "key_wrap_metadata": {
+                        "algorithm": "recovery-box-v1",
+                        "nonce": "RECIPIENT_RECOVERY_NONCE",
                     },
                     "envelope_version": 1,
                 },
@@ -296,6 +336,7 @@ class DirectMessageAttachmentLinkingAPITests(APITestCase):
             format="json",
         )
 
+
         self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second_response.status_code, status.HTTP_200_OK)
 
@@ -332,6 +373,7 @@ class DirectMessageAttachmentLinkingAPITests(APITestCase):
             second_payload,
             format="json",
         )
+
 
         self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second_response.status_code, status.HTTP_409_CONFLICT)
@@ -491,6 +533,7 @@ class GroupMessageAttachmentLinkingAPITests(APITestCase):
             format="json",
         )
 
+
         self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second_response.status_code, status.HTTP_200_OK)
 
@@ -537,6 +580,7 @@ class GroupMessageAttachmentLinkingAPITests(APITestCase):
             second_payload,
             format="json",
         )
+
 
         self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second_response.status_code, status.HTTP_409_CONFLICT)

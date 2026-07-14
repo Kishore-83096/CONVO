@@ -3,6 +3,7 @@ import uuid
 from datetime import timedelta
 
 from channels.layers import get_channel_layer
+from django.core.cache import cache
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -41,6 +42,7 @@ class ReadReceiptPublisherTests(TransactionTestCase):
     )
 
     def setUp(self):
+        cache.clear()
         self.sender_device = Device.objects.create(
             id=self.sender_device_id,
             user_id="1",

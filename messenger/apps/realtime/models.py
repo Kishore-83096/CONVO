@@ -172,13 +172,6 @@ class RealtimeOutboxEvent(models.Model):
                 fields=[
                     "status",
                     "next_attempt_at",
-                ],
-                name="rt_outbox_status_next_idx",
-            ),
-            models.Index(
-                fields=[
-                    "status",
-                    "next_attempt_at",
                     "created_at",
                 ],
                 name="rt_outbox_due_idx",
@@ -189,20 +182,6 @@ class RealtimeOutboxEvent(models.Model):
                     "claimed_at",
                 ],
                 name="rt_outbox_claim_idx",
-            ),
-            models.Index(
-                fields=[
-                    "event_type",
-                    "created_at",
-                ],
-                name="rt_outbox_type_created_idx",
-            ),
-            models.Index(
-                fields=[
-                    "target_group",
-                    "created_at",
-                ],
-                name="rt_outbox_group_created_idx",
             ),
         ]
 

@@ -205,7 +205,9 @@ def apply_security_transition(
     try:
         with transaction.atomic():
             transition = (
-                GroupSecurityTransition.objects.select_for_update()
+                GroupSecurityTransition.objects.select_for_update(
+                    of=("self",),
+                )
                 .select_related(
                     "group_room",
                     "target_device",

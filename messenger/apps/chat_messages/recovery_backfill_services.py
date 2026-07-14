@@ -219,6 +219,10 @@ def backfill_recovery_envelopes(
         for item in envelopes
     ]
 
+    # These joins are cardinality-safe: RoomMember is unique per
+    # (room, user_id), and MessageKeyEnvelope is unique per
+    # (message, recipient_device). DISTINCT is therefore unnecessary and
+    # cannot be combined with SELECT FOR UPDATE on PostgreSQL.
     authorized_messages = {
         message.id: message
         for message in (
@@ -235,7 +239,6 @@ def backfill_recovery_envelopes(
                 ),
                 key_envelopes__recipient_device=device,
             )
-            .distinct()
         )
     }
 

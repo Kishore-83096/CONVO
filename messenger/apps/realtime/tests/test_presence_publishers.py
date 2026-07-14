@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from channels.layers import get_channel_layer
+from django.core.cache import cache
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -105,6 +106,7 @@ class PresencePublisherTests(TransactionTestCase):
     )
 
     def setUp(self):
+        cache.clear()
         self.redis = FakeAsyncRedis()
 
         self.subject_device = Device.objects.create(
